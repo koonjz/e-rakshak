@@ -470,7 +470,7 @@ class TelegramCrawler(BaseCrawler):
                         }
                     
                     posts = []
-                    channels = ["gujaratsamacharofficial", "divyabhaskar", "ahmedabad_news"]
+                    channels = ["gujaratsamacharofficial", "divyabhaskar", "ABPAsmitaOfficial", "SandeshNewsOfficial"]
                     cities = [
                         {"city": "Ahmedabad", "latitude": 23.0225, "longitude": 72.5714},
                         {"city": "Surat", "latitude": 21.1702, "longitude": 72.8311},
@@ -507,6 +507,7 @@ class TelegramCrawler(BaseCrawler):
                         except Exception as e:
                             print(f"TelegramCrawler: Failed to fetch from channel {channel}: {e}")
                             
+                    posts.sort(key=lambda p: p["timestamp"], reverse=True)
                     return posts
                 except Exception as ex:
                     return {"status": "pending_auth", "message": f"Telegram connection error: {ex}"}
@@ -552,7 +553,7 @@ class TelegramCrawler(BaseCrawler):
             return
             
         yielded_ids = set()
-        channels = ["gujaratsamacharofficial", "divyabhaskar", "ahmedabad_news"]
+        channels = ["gujaratsamacharofficial", "divyabhaskar", "ABPAsmitaOfficial", "SandeshNewsOfficial"]
         cities = [
             {"city": "Ahmedabad", "latitude": 23.0225, "longitude": 72.5714},
             {"city": "Surat", "latitude": 21.1702, "longitude": 72.8311},
