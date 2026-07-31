@@ -1,0 +1,1352 @@
+import { useState, useEffect, useRef } from 'react'
+
+interface HealthResponse {
+  status: string;
+  timestamp: number;
+  service: string;
+  version: string;
+}
+
+interface Post {
+  id: string;
+  username: string;
+  platform: string;
+  timestamp: string;
+  text: string;
+  language: string;
+  threat_category: string;
+  engagement: { likes: number; shares: number; comments: number };
+  geo: { city: string; latitude: number; longitude: number };
+  user_profile?: { account_created_date: string; follower_count: number; following_count: number };
+}
+
+interface TrendPoint {
+  timestamp: string;
+  post_count: number;
+  top_keywords: Record<string, number>;
+  geo_distribution: Record<string, number>;
+  lang_distribution: Record<string, number>;
+  rolling_baseline: number;
+  is_spike: boolean;
+}
+
+interface Cluster {
+  cluster_id: string;
+  member_accounts: string[];
+  heuristics: string[];
+  suspicion_score: number;
+  matched_posts: {
+    id: string;
+    username: string;
+    timestamp: string;
+    text: string;
+    threat_category: string;
+    platform: string;
+  }[];
+}
+
+interface AlertItem {
+  id: string;
+  type: 'post' | 'cluster';
+  title: string;
+  description: string;
+  timestamp: string;
+  severity: 'high' | 'critical';
+}
+
+// Global set to track already-alerted unique post/cluster IDs across polling cycles
+const globalAlertedIds = new Set<string>();
+
+function App() {
+  // Connection states
+  const [connectionStatus, setConnectionStatus] = useState<'checking' | 'online' | 'offline'>('checking')
+  const [healthData, setHealthData] = useState<HealthResponse | null>(null)
+  const [latency, setLatency] = useState<number | null>(null)
+
+  // Crawler and Database states
+  const [crawlerActive, setCrawlerActive] = useState(false)
+  const [crawlerModeSelection, setCrawlerModeSelection] = useState<'mock' | 'youtube' | 'instagram' | 'facebook' | 'telegram'>('mock')
+  const [crawlerKeywords, setCrawlerKeywords] = useState('')
+  const [backendCrawlerMode, setBackendCrawlerMode] = useState<'mock' | 'youtube' | 'instagram' | 'facebook' | 'telegram'>('mock')
+  const [youtubeKeyLoaded, setYoutubeKeyLoaded] = useState(false)
+  const [metaTokenLoaded, setMetaTokenLoaded] = useState(false)
+  const [telegramAuthLoaded, setTelegramAuthLoaded] = useState(false)
+  const [queueSize, setQueueSize] = useState(0)
+  const [postsFeed, setPostsFeed] = useState<Post[]>([])
+  const [coordinationClusters, setCoordinationClusters] = useState<Cluster[]>([])
+  const [trendsData, setTrendsData] = useState<TrendPoint[]>([])
+  const [activeAlerts, setActiveAlerts] = useState<AlertItem[]>([])
+  
+  // Incidents states
+  const [activeTab, setActiveTab] = useState<'monitor' | 'incidents'>('monitor')
+  const [incidents, setIncidents] = useState<any[]>([])
+  const [expandedIncident, setExpandedIncident] = useState<string | null>(null)
+  
+  // Incident filter states
+  const [filterIncidentSeverity, setFilterIncidentSeverity] = useState<string>('All')
+  const [filterIncidentCategory, setFilterIncidentCategory] = useState<string>('All')
+  const [filterIncidentKeyword, setFilterIncidentKeyword] = useState<string>('')
+
+  // Interactive Sandbox state
+  const [textInput, setTextInput] = useState("Alert: We will block the roads near Surat bypass tomorrow morning. Join the protest!")
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [analysisResult, setAnalysisResult] = useState<{
+    language: string;
+    threatCategory: string;
+    sentimentScore: number;
+    confidence: number;
+    threatScore: number;
+  } | null>(null)
+
+  // Filter states
+  const [filterLanguage, setFilterLanguage] = useState<string>('All')
+  const [filterThreatLevel, setFilterThreatLevel] = useState<string>('All')
+  const [filterCity, setFilterCity] = useState<string>('All')
+  const [filterKeyword, setFilterKeyword] = useState<string>('')
+
+  // UI state
+  const [expandedCluster, setExpandedCluster] = useState<string | null>(null)
+  const [hoveredTrendPoint, setHoveredTrendPoint] = useState<TrendPoint | null>(null)
+
+  // Check backend server connection
+  const checkConnection = async () => {
+    const startTime = performance.now()
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/health')
+      if (res.ok) {
+        const data = await res.json()
+        const endTime = performance.now()
+        setLatency(Math.round(endTime - startTime))
+        setHealthData(data)
+        setConnectionStatus('online')
+      } else {
+        throw new Error()
+      }
+    } catch {
+      setConnectionStatus('offline')
+      setHealthData(null)
+      setLatency(null)
+    }
+  }
+
+  const checkCrawlerStatus = async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/crawler/status')
+      if (res.ok) {
+        const data = await res.json()
+        setCrawlerActive(data.active)
+        setBackendCrawlerMode(data.mode || 'mock')
+        setQueueSize(data.queue_size)
+        setYoutubeKeyLoaded(!!data.youtube_key_loaded)
+        setMetaTokenLoaded(!!data.meta_token_loaded)
+        setTelegramAuthLoaded(!!data.telegram_auth_loaded)
+      }
+    } catch (err) {
+      console.error('Failed to get crawler status', err)
+    }
+  }
+
+  // Fetch trends data
+  const fetchTrends = async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/trends?interval=day')
+      if (res.ok) {
+        const data = await res.json()
+        setTrendsData(data)
+      }
+    } catch (err) {
+      console.error('Failed to fetch trends data', err)
+    }
+  }
+
+  // Fetch coordination clusters
+  const fetchCoordination = async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/coordination')
+      if (res.ok) {
+        const data = await res.json()
+        setCoordinationClusters(data)
+        
+        // Check for high-severity clusters (suspicion >= 75)
+        data.forEach((cluster: Cluster) => {
+          if (cluster.suspicion_score >= 75 && !globalAlertedIds.has(cluster.cluster_id)) {
+            globalAlertedIds.add(cluster.cluster_id)
+            const alertTime = new Date().toLocaleTimeString()
+            const triggerList = cluster.heuristics.join(', ')
+            setActiveAlerts(prev => [
+              {
+                id: cluster.cluster_id,
+                type: 'cluster',
+                title: `Coordinated Campaign Flagged`,
+                description: `Campaign ${cluster.cluster_id} detected with suspicion score of ${cluster.suspicion_score}% (Triggers: ${triggerList})`,
+                timestamp: alertTime,
+                severity: 'critical'
+              },
+              ...prev
+            ])
+
+            // Auto dismiss after 6 seconds if not acknowledged
+            setTimeout(() => {
+              setActiveAlerts(prev => prev.filter(a => a.id !== cluster.cluster_id))
+            }, 6000)
+          }
+        })
+      }
+    } catch (err) {
+      console.error('Failed to fetch coordination clusters', err)
+    }
+  }
+
+  // Fetch persistent incidents from backend
+  const fetchIncidents = async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/incidents')
+      if (res.ok) {
+        const data = await res.json()
+        setIncidents(data)
+      }
+    } catch (err) {
+      console.error('Failed to fetch incidents', err)
+    }
+  }
+
+  // Export incident report as dynamic Markdown file download
+  const handleExportReport = (incident: any) => {
+    const postsText = incident.related_posts.map((p: any, idx: number) => (
+      `### Related Post #${idx + 1} (${p.platform})\n` +
+      `- **User**: ${p.username}\n` +
+      `- **Timestamp**: ${p.timestamp}\n` +
+      `- **Text**: ${p.text}\n` +
+      (p.geo ? `- **Location**: ${p.geo.city} (${p.geo.latitude}, ${p.geo.longitude})\n` : '')
+    )).join('\n');
+
+    const mdContent = (
+      `# THREAT INCIDENT REPORT - ${incident.incident_id}\n` +
+      `**Severity**: ${incident.severity}\n` +
+      `**Category**: ${incident.threat_category}\n` +
+      `**Affected Geo**: ${incident.affected_geo}\n` +
+      `**Timestamp**: ${incident.timestamp}\n\n` +
+      `## Incident Summary\n` +
+      `${incident.summary}\n\n` +
+      `## Matched Ingested Posts\n` +
+      `${postsText}\n\n` +
+      `## Duty Officer Escalation Template\n` +
+      `\`\`\`\n` +
+      `${incident.suggested_escalation_template}\n` +
+      `\`\`\`\n\n` +
+      `*Report generated programmatically via Social Threat Analyzer Console on ${new Date().toLocaleString()}*`
+    );
+
+    const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `INCIDENT_REPORT_${incident.incident_id}.md`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  // Start/Stop Crawler
+  const toggleCrawler = async () => {
+    if (crawlerActive) {
+      try {
+        const res = await fetch(`http://127.0.0.1:8000/api/crawler/stop`, { method: 'POST' })
+        if (res.ok) {
+          checkCrawlerStatus()
+        }
+      } catch (err) {
+        console.error('Failed to stop crawler', err)
+      }
+    } else {
+      let endpoint = 'start'
+      let query = ''
+      if (crawlerModeSelection !== 'mock') {
+        endpoint = 'start-live'
+        query = `?platform=${crawlerModeSelection}&keywords=${encodeURIComponent(crawlerKeywords)}`
+      }
+      try {
+        const res = await fetch(`http://127.0.0.1:8000/api/crawler/${endpoint}${query}`, { method: 'POST' })
+        if (res.ok) {
+          const data = await res.json()
+          if (data.status === 'pending_meta_review' || data.status === 'pending_auth') {
+            alert(data.message)
+          }
+          checkCrawlerStatus()
+        }
+      } catch (err) {
+        console.error(`Failed to start ${crawlerModeSelection} crawler`, err)
+      }
+    }
+  }
+
+  // Poll new crawled posts from backend
+  const pollPosts = async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/crawler/posts?limit=30')
+      if (res.ok) {
+        const newPosts: Post[] = await res.json()
+        if (newPosts.length > 0) {
+          // Prepend new posts and limit history to last 100
+          setPostsFeed(prev => {
+            const updated = [...newPosts, ...prev]
+            return updated.slice(0, 100)
+          })
+
+          // Check for critical threats (Incitement to Violence) in newly polled posts
+          newPosts.forEach(post => {
+            if (post.threat_category === 'Incitement to Violence' && !globalAlertedIds.has(post.id)) {
+              globalAlertedIds.add(post.id)
+              const alertTime = new Date(post.timestamp).toLocaleTimeString()
+              setActiveAlerts(prev => [
+                {
+                  id: post.id,
+                  type: 'post',
+                  title: `Incitement Threat Detected`,
+                  description: `User ${post.username} on ${post.platform} posted: "${post.text.slice(0, 80)}..." in ${post.geo.city}`,
+                  timestamp: alertTime,
+                  severity: 'high'
+                },
+                ...prev
+              ])
+
+              // Auto dismiss after 6 seconds if not acknowledged
+              setTimeout(() => {
+                setActiveAlerts(prev => prev.filter(a => a.id !== post.id))
+              }, 6000)
+            }
+          })
+
+          // Refresh trends, coordination, and incidents data when new posts are ingested
+          fetchTrends()
+          fetchCoordination()
+          fetchIncidents()
+        }
+      }
+    } catch (err) {
+      console.error('Failed to poll posts', err)
+    }
+  }
+
+  // Ad-hoc classifier sandbox test
+  const handleAnalyzeText = async () => {
+    if (!textInput.trim()) return
+    setIsAnalyzing(true)
+    try {
+      const response = await fetch('http://127.0.0.1:8000/api/classify', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: textInput }),
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        setAnalysisResult({
+          language: data.language,
+          threatCategory: data.threat_category,
+          sentimentScore: data.sentiment_score,
+          confidence: data.confidence,
+          threatScore: Math.round((1 - data.sentiment_score) * 100)
+        })
+      }
+    } catch (err) {
+      console.error("Classifier API failure", err)
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }
+
+  // Prepopulate dashboard by draining some initial mock posts if database has them
+  const prepopulateLocalFeed = async () => {
+    // Attempt to pull a few initial posts already classified on main.py startup
+    try {
+      // Start backend crawler task briefly to push posts if database starts completely fresh
+      // Wait, trends data has everything pre-populated. Let's seed initial 20 posts from local sample
+      const res = await fetch('http://127.0.0.1:8000/api/crawler/posts?limit=15')
+      if (res.ok) {
+        const initialPosts = await res.json()
+        setPostsFeed(initialPosts)
+      }
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  // Initial dashboard mount loops
+  useEffect(() => {
+    checkConnection()
+    checkCrawlerStatus()
+    fetchTrends()
+    fetchCoordination()
+    fetchIncidents()
+    prepopulateLocalFeed()
+
+    // Status intervals
+    const connInterval = setInterval(checkConnection, 15000)
+    const statusInterval = setInterval(checkCrawlerStatus, 5000)
+    const incidentsInterval = setInterval(fetchIncidents, 5000)
+    
+    return () => {
+      clearInterval(connInterval)
+      clearInterval(statusInterval)
+      clearInterval(incidentsInterval)
+    }
+  }, [])
+
+  // Poll posts only when crawler is active
+  useEffect(() => {
+    let pollInterval: NodeJS.Timeout
+    if (crawlerActive) {
+      pollInterval = setInterval(pollPosts, 3000)
+    }
+    return () => {
+      if (pollInterval) clearInterval(pollInterval)
+    }
+  }, [crawlerActive])
+
+  // Filter posts feed
+  const filteredFeed = postsFeed.filter(post => {
+    // Language Filter
+    if (filterLanguage !== 'All' && post.language.toLowerCase() !== filterLanguage.toLowerCase()) {
+      return false
+    }
+    // Threat level Filter
+    if (filterThreatLevel !== 'All' && post.threat_category.toLowerCase() !== filterThreatLevel.toLowerCase()) {
+      return false
+    }
+    // City Filter
+    if (filterCity !== 'All' && post.geo.city.toLowerCase() !== filterCity.toLowerCase()) {
+      return false
+    }
+    // Keyword Filter
+    if (filterKeyword.trim() !== '') {
+      const keyword = filterKeyword.toLowerCase()
+      const matchesText = post.text.toLowerCase().includes(keyword)
+      const matchesUser = post.username.toLowerCase().includes(keyword)
+      if (!matchesText && !matchesUser) {
+        return false
+      }
+    }
+    return true
+  })
+
+  // Filter incidents list
+  const filteredIncidents = incidents.filter(inc => {
+    // Severity Filter
+    if (filterIncidentSeverity !== 'All' && inc.severity.toLowerCase() !== filterIncidentSeverity.toLowerCase()) {
+      return false
+    }
+    // Category Filter
+    if (filterIncidentCategory !== 'All' && inc.threat_category.toLowerCase() !== filterIncidentCategory.toLowerCase()) {
+      return false
+    }
+    // Keyword Filter
+    if (filterIncidentKeyword.trim() !== '') {
+      const query = filterIncidentKeyword.toLowerCase()
+      const matchesID = inc.incident_id.toLowerCase().includes(query)
+      const matchesSummary = inc.summary.toLowerCase().includes(query)
+      const matchesGeo = inc.affected_geo.toLowerCase().includes(query)
+      if (!matchesID && !matchesSummary && !matchesGeo) {
+        return false
+      }
+    }
+    return true
+  })
+
+  // Cities extracted from constants for filter dropdown
+  const citiesList = ["Ahmedabad", "Surat", "Vadodara", "Rajkot", "Gandhinagar", "Bhavnagar", "Jamnagar", "Junagadh", "Anand", "Nadiad"]
+
+  // Dismiss a high-severity warning alert banner
+  const dismissAlert = (id: string) => {
+    setActiveAlerts(prev => prev.filter(alert => alert.id !== id))
+  }
+
+  // Custom SVG Trends line chart logic
+  const renderSVGChart = () => {
+    if (trendsData.length === 0) {
+      return (
+        <div className="h-full flex items-center justify-center text-zinc-500 text-xs italic">
+          No trends data loaded. Start crawler to record ingestion.
+        </div>
+      )
+    }
+
+    const width = 640
+    const height = 180
+    const padding = 25
+    const chartWidth = width - 2 * padding
+    const chartHeight = height - 2 * padding
+    const maxVal = Math.max(...trendsData.map(pt => pt.post_count), 15)
+
+    // Compute coordinate points
+    const points = trendsData.map((pt, i) => {
+      const x = padding + (i * chartWidth) / (trendsData.length - 1)
+      const y = height - padding - (pt.post_count * chartHeight) / maxVal
+      return { x, y, pt }
+    })
+
+    // Construct path line
+    const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
+    // Construct gradient area fill path
+    const areaPath = `${linePath} L ${points[points.length - 1].x} ${height - padding} L ${points[0].x} ${height - padding} Z`
+
+    return (
+      <div className="relative w-full h-[200px]">
+        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full text-zinc-700">
+          <defs>
+            <linearGradient id="chartGlow" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#818cf8" stopOpacity="0.25" />
+              <stop offset="100%" stopColor="#818cf8" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+
+          {/* Grid lines */}
+          {[0, 0.25, 0.5, 0.75, 1].map((ratio, idx) => {
+            const yGrid = padding + ratio * chartHeight
+            return (
+              <line 
+                key={idx}
+                x1={padding} 
+                y1={yGrid} 
+                x2={width - padding} 
+                y2={yGrid} 
+                stroke="#27272a" 
+                strokeWidth="1"
+                strokeDasharray="4"
+              />
+            )
+          })}
+
+          {/* Area Fill */}
+          <path d={areaPath} fill="url(#chartGlow)" />
+
+          {/* Line Path */}
+          <path d={linePath} fill="none" stroke="#6366f1" strokeWidth="2.5" strokeLinecap="round" />
+
+          {/* Interactive dots and Spikes */}
+          {points.map((p, idx) => {
+            const isSpike = p.pt.is_spike
+            return (
+              <g 
+                key={idx}
+                onMouseEnter={() => setHoveredTrendPoint(p.pt)}
+                onMouseLeave={() => setHoveredTrendPoint(null)}
+                className="cursor-pointer"
+              >
+                {isSpike && (
+                  <>
+                    <circle cx={p.x} cy={p.y} r="10" fill="#ef4444" className="animate-ping opacity-40" />
+                    <circle cx={p.x} cy={p.y} r="5" fill="#f43f5e" stroke="#ef4444" strokeWidth="1.5" />
+                  </>
+                )}
+                
+                {/* General dot hover target */}
+                <circle 
+                  cx={p.x} 
+                  cy={p.y} 
+                  r={isSpike ? "5" : "3.5"} 
+                  fill={isSpike ? "#f43f5e" : "#4f46e5"} 
+                  className="opacity-0 hover:opacity-100 transition-opacity" 
+                />
+              </g>
+            )
+          })}
+        </svg>
+
+        {/* Custom chart tooltip overlay */}
+        {hoveredTrendPoint && (
+          <div className="absolute top-2 left-1/2 transform -translate-x-1/2 z-20 bg-zinc-950/95 border border-zinc-800 p-2.5 rounded-lg text-[10px] font-mono shadow-2xl min-w-[180px] space-y-1">
+            <div className="flex justify-between border-b border-zinc-800 pb-1">
+              <span className="text-zinc-500">Date:</span>
+              <span className="text-white font-semibold">{hoveredTrendPoint.timestamp}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-zinc-500">Volume:</span>
+              <span className="text-indigo-400 font-semibold">{hoveredTrendPoint.post_count} posts</span>
+            </div>
+            {hoveredTrendPoint.is_spike && (
+              <div className="text-rose-400 font-semibold flex items-center gap-0.5 animate-pulse text-[9px]">
+                ⚠️ ANOMALY VOLUME SPIKE DETECTED
+              </div>
+            )}
+            <div className="text-zinc-400 mt-1">
+              <span className="text-[9px] uppercase tracking-wide text-zinc-500 block font-semibold">Top Keywords</span>
+              <span className="text-white block truncate">
+                {Object.keys(hoveredTrendPoint.top_keywords).join(', ') || 'None'}
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Get color badges for threat categories
+  const getThreatBadgeStyle = (cat: string) => {
+    switch (cat.toLowerCase()) {
+      case 'incitement to violence':
+      case 'incitement':
+        return 'bg-rose-500/10 text-rose-400 border border-rose-500/20 shadow-md shadow-rose-950/20'
+      case 'fake news':
+      case 'fake_news':
+        return 'bg-fuchsia-500/10 text-fuchsia-400 border border-fuchsia-500/20'
+      case 'inflammatory':
+        return 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+      default:
+        return 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+    }
+  }
+
+  // Get border outline style for post cards
+  const getPostCardStyle = (cat: string) => {
+    switch (cat.toLowerCase()) {
+      case 'incitement to violence':
+      case 'incitement':
+        return 'border-rose-950/80 bg-rose-950/10 hover:border-rose-500/40'
+      case 'fake news':
+      case 'fake_news':
+        return 'border-fuchsia-950/80 bg-fuchsia-950/10 hover:border-fuchsia-500/40'
+      case 'inflammatory':
+        return 'border-amber-950/80 bg-amber-950/10 hover:border-amber-500/40'
+      default:
+        return 'border-zinc-800 bg-zinc-900/40 hover:border-zinc-700'
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans flex flex-col relative selection:bg-rose-600/30 selection:text-rose-300 overflow-x-hidden">
+      
+      {/* Law-enforcement monitoring terminal grid overlays */}
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,#000000_1px,transparent_1px),linear-gradient(to_bottom,#080808_1px,transparent_1px)] bg-[size:1.5rem_1.5rem] pointer-events-none opacity-45" />
+      <div className="absolute top-0 right-0 w-[40rem] h-[40rem] bg-rose-500/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-10 left-0 w-[30rem] h-[30rem] bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
+
+
+
+      {/* Main Console Header */}
+      <header className="relative border-b border-zinc-900 bg-zinc-900/40 backdrop-blur-md sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-lg bg-zinc-950 border border-rose-900/50 flex items-center justify-center shadow-lg shadow-rose-900/5">
+              <span className="text-rose-500 text-lg font-bold font-mono animate-pulse">⚙</span>
+            </div>
+            <div>
+              <h1 className="text-md font-extrabold uppercase tracking-widest text-white flex items-center gap-2 font-mono">
+                THREAT ANALYST CONSOLE
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                  LIVE FEED
+                </span>
+              </h1>
+              <p className="text-xs text-zinc-500 font-mono">Ingested queue anomalies: Gujarat cities cluster check</p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Health pill */}
+            <div className={`flex items-center space-x-2 px-3 py-1.5 rounded bg-zinc-950 border text-[11px] font-mono ${
+              connectionStatus === 'online' 
+                ? 'border-emerald-500/20 text-emerald-400' 
+                : 'border-rose-500/20 text-rose-400 animate-pulse'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${
+                connectionStatus === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'
+              }`} />
+              <span>{connectionStatus === 'online' ? `API ONLINE (${latency}ms)` : 'API OFFLINE'}</span>
+            </div>
+
+            {/* Live stream status */}
+            <div className={`flex items-center space-x-2 px-3 py-1.5 rounded bg-zinc-950 border text-[11px] font-mono ${
+              crawlerActive ? 'border-indigo-500/20 text-indigo-400' : 'border-zinc-800 text-zinc-500'
+            }`}>
+              <span>CRAWLER QUEUE: {queueSize} ITEMS</span>
+            </div>
+
+            {/* Ingestion stream control button */}
+            <button 
+              onClick={toggleCrawler}
+              disabled={connectionStatus !== 'online'}
+              className={`px-4 py-1.5 rounded text-xs font-bold font-mono transition-all cursor-pointer disabled:opacity-50 ${
+                crawlerActive 
+                  ? 'bg-rose-950 border border-rose-500 hover:bg-rose-900 text-white' 
+                  : 'bg-zinc-950 border border-indigo-500 hover:bg-zinc-900 text-indigo-400'
+              }`}
+            >
+              {crawlerActive ? '■ HALT STREAMING' : '▶ INGEST LIVE STREAM'}
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Tab Switcher */}
+      <div className="max-w-7xl mx-auto px-6 pt-6 w-full flex border-b border-zinc-900 z-10 relative">
+        <button
+          onClick={() => setActiveTab('monitor')}
+          className={`px-6 py-2.5 font-mono text-xs font-bold uppercase tracking-widest border-b-2 cursor-pointer transition-all ${
+            activeTab === 'monitor' 
+              ? 'border-indigo-500 text-indigo-400 bg-indigo-950/10' 
+              : 'border-transparent text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          🖥️ Live Monitor
+        </button>
+        <button
+          onClick={() => setActiveTab('incidents')}
+          className={`px-6 py-2.5 font-mono text-xs font-bold uppercase tracking-widest border-b-2 cursor-pointer transition-all flex items-center gap-2 ${
+            activeTab === 'incidents' 
+              ? 'border-rose-500 text-rose-400 bg-rose-950/10' 
+              : 'border-transparent text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          🚨 Incident Log
+          <span className={`px-2 py-0.5 rounded text-[10px] ${incidents.length > 0 ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-zinc-900 text-zinc-600'}`}>
+            {incidents.length}
+          </span>
+        </button>
+      </div>
+
+      {/* Main Content Layout */}
+      {activeTab === 'incidents' ? (
+        <main className="flex-1 max-w-7xl mx-auto px-6 py-6 w-full relative z-10 space-y-6">
+          <div className="bg-zinc-900/40 border border-zinc-900 rounded-xl p-5 backdrop-blur-md shadow-xl flex flex-col space-y-4">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 border-b border-zinc-900 pb-4">
+              <div>
+                <h3 className="text-xs font-extrabold uppercase tracking-widest text-zinc-400 font-mono">
+                  🚨 Persistent Critical Threat Incidents ({filteredIncidents.length} matched)
+                </h3>
+                <p className="text-[10px] text-zinc-500 font-mono">Generated from Incitement and Coordination threshold triggers</p>
+              </div>
+            </div>
+
+            {/* Incident filter controls */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 rounded-lg bg-zinc-950/60 border border-zinc-900/50">
+              {/* Severity dropdown */}
+              <div>
+                <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5 font-mono">Severity Level</label>
+                <select 
+                  value={filterIncidentSeverity}
+                  onChange={(e) => setFilterIncidentSeverity(e.target.value)}
+                  className="w-full text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded p-1 text-zinc-300"
+                >
+                  <option value="All">ALL SEVERITIES</option>
+                  <option value="HIGH">HIGH</option>
+                  <option value="CRITICAL">CRITICAL</option>
+                </select>
+              </div>
+
+              {/* Category dropdown */}
+              <div>
+                <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5 font-mono">Incident Type</label>
+                <select 
+                  value={filterIncidentCategory}
+                  onChange={(e) => setFilterIncidentCategory(e.target.value)}
+                  className="w-full text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded p-1 text-zinc-300"
+                >
+                  <option value="All">ALL TYPES</option>
+                  <option value="Incitement to Violence">Incitement to Violence</option>
+                  <option value="Coordinated Amplification">Coordinated Amplification</option>
+                </select>
+              </div>
+
+              {/* Text query filter */}
+              <div>
+                <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5 font-mono">Search Incident Log</label>
+                <input 
+                  type="text"
+                  placeholder="Query summary/location/ID..."
+                  value={filterIncidentKeyword}
+                  onChange={(e) => setFilterIncidentKeyword(e.target.value)}
+                  className="w-full text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded p-1 text-zinc-300 placeholder:text-zinc-700"
+                />
+              </div>
+            </div>
+
+            {/* List of incidents */}
+            <div className="space-y-4 overflow-y-auto max-h-[580px] pr-2">
+              {filteredIncidents.length === 0 ? (
+                <div className="h-48 flex items-center justify-center text-zinc-600 text-xs italic">
+                  No incident records matched current filters.
+                </div>
+              ) : (
+                filteredIncidents.map((inc) => {
+                  const isCritical = inc.severity === 'CRITICAL'
+                  const isExpanded = expandedIncident === inc.incident_id
+                  return (
+                    <div 
+                      key={inc.incident_id}
+                      className={`rounded-lg border bg-zinc-950/40 hover:bg-zinc-950/60 transition-all ${
+                        isCritical ? 'border-rose-950/80 hover:border-rose-500/30' : 'border-amber-950/80 hover:border-amber-500/30'
+                      }`}
+                    >
+                      {/* Summary Row */}
+                      <div 
+                        onClick={() => setExpandedIncident(isExpanded ? null : inc.incident_id)}
+                        className="p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-3 cursor-pointer select-none"
+                      >
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono font-extrabold text-xs text-white">{inc.incident_id}</span>
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded font-mono ${
+                              isCritical ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                            }`}>
+                              {inc.severity}
+                            </span>
+                            <span className="text-[10px] text-zinc-500 font-mono">
+                              {inc.threat_category}
+                            </span>
+                          </div>
+                          <h4 className="text-xs font-bold text-zinc-200 mt-1 leading-snug">{inc.summary}</h4>
+                        </div>
+
+                        <div className="flex items-center gap-4 text-[10px] font-mono text-zinc-500">
+                          <div>📍 {inc.affected_geo}</div>
+                          <div>📅 {new Date(inc.timestamp).toLocaleString()}</div>
+                          <div className="text-zinc-600 text-xs font-bold w-4 text-center">
+                            {isExpanded ? '▲' : '▼'}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Expanded Section */}
+                      {isExpanded && (
+                        <div className="px-4 pb-4 border-t border-zinc-900 pt-4 space-y-4">
+                          {/* Related Posts */}
+                          <div className="space-y-2">
+                            <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest block font-mono">
+                              Matched Source Posts ({inc.related_posts.length})
+                            </span>
+                            <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                              {inc.related_posts.map((rp: any, idx: number) => (
+                                <div key={idx} className="p-3 rounded bg-zinc-900/60 border border-zinc-900 space-y-1.5">
+                                  <div className="flex justify-between items-center text-[10px] font-mono">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-bold text-zinc-300">{rp.username}</span>
+                                      <span className="text-zinc-600 font-normal">on</span>
+                                      <span className="text-indigo-400 uppercase font-semibold text-[9px]">{rp.platform}</span>
+                                    </div>
+                                    <span className="text-zinc-500 text-[9px]">
+                                      {new Date(rp.timestamp).toLocaleTimeString()}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-zinc-400 leading-relaxed font-sans">{rp.text}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Duty Officer Template */}
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-center">
+                              <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest block font-mono">
+                                Suggested Escalation Template
+                              </span>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigator.clipboard.writeText(inc.suggested_escalation_template);
+                                  alert("Escalation template copied to clipboard!");
+                                }}
+                                className="text-[9px] font-mono text-indigo-400 hover:text-indigo-300 underline cursor-pointer bg-transparent border-none"
+                              >
+                                Copy Template
+                              </button>
+                            </div>
+                            <pre className="p-3 rounded bg-zinc-950 border border-zinc-900 font-mono text-[10px] text-rose-400/90 whitespace-pre-wrap leading-relaxed overflow-x-auto shadow-inner">
+                              {inc.suggested_escalation_template}
+                            </pre>
+                          </div>
+
+                          {/* Action Row */}
+                          <div className="flex justify-end pt-2">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleExportReport(inc);
+                              }}
+                              className="px-4 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 text-xs font-bold font-mono rounded cursor-pointer transition-all flex items-center gap-1.5"
+                            >
+                              📥 Export as Report (.md)
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          </div>
+        </main>
+      ) : (
+        <main className="flex-1 max-w-7xl mx-auto px-6 py-6 w-full grid grid-cols-1 lg:grid-cols-12 gap-6 relative z-10">
+        
+        {/* Left Side: Filter and Ingestion Feed */}
+        <section className="lg:col-span-8 space-y-6 flex flex-col min-h-[500px]">
+          
+          {/* 🛰️ Data Ingestion Source & Mode Controller */}
+          <div className="bg-zinc-900/40 border border-zinc-900 rounded-xl p-5 backdrop-blur-md shadow-xl flex flex-col space-y-4">
+            <div className="flex justify-between items-center border-b border-zinc-900 pb-3">
+              <div>
+                <h3 className="text-xs font-extrabold uppercase tracking-widest text-zinc-400 font-mono flex items-center gap-2">
+                  <span className="animate-pulse text-indigo-500">🛰️</span> Ingestion Stream Control Panel
+                </h3>
+                <p className="text-[10px] text-zinc-500 font-mono">
+                  Current Mode: <span className="text-indigo-400 font-bold uppercase">{backendCrawlerMode === 'youtube' ? 'Live YouTube Crawler' : backendCrawlerMode === 'instagram' ? 'Live Instagram Crawler' : backendCrawlerMode === 'facebook' ? 'Live Facebook Crawler' : backendCrawlerMode === 'telegram' ? 'Live Telegram Crawler' : 'Mock Ingestion Feed'}</span>
+                  {crawlerActive ? (
+                    <span className="ml-2 px-1.5 py-0.5 rounded text-[8px] bg-rose-500/10 text-rose-400 border border-rose-500/20 font-bold animate-pulse">ACTIVE STREAMING</span>
+                  ) : (
+                    <span className="ml-2 px-1.5 py-0.5 rounded text-[8px] bg-zinc-800 text-zinc-400 border border-zinc-700 font-bold">STANDBY</span>
+                  )}
+                </p>
+              </div>
+              <span className="text-[10px] text-zinc-500 font-mono">QUEUE: {queueSize} ITEMS</span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+              {/* Ingestion Mode Select */}
+              <div className="md:col-span-4">
+                <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5 font-mono">Select Source Mode</label>
+                <select
+                  value={crawlerModeSelection}
+                  onChange={(e) => setCrawlerModeSelection(e.target.value as 'mock' | 'youtube' | 'instagram' | 'facebook' | 'telegram')}
+                  disabled={crawlerActive}
+                  className="w-full text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded p-2 text-zinc-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <option value="mock">MOCK SANDBOX FEED (DEFAULT)</option>
+                  <option value="youtube">LIVE YOUTUBE MODE (REAL-TIME)</option>
+                  <option value="instagram">LIVE INSTAGRAM MODE (REAL-TIME)</option>
+                  <option value="facebook">LIVE FACEBOOK MODE (REAL-TIME)</option>
+                  <option value="telegram">LIVE TELEGRAM MODE (REAL-TIME)</option>
+                </select>
+              </div>
+
+              {/* YouTube Keyword Search Input */}
+              <div className="md:col-span-5">
+                <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5 font-mono">
+                  Live Search Query / Keywords
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Gujarat, protest, blockades"
+                  value={crawlerKeywords}
+                  onChange={(e) => setCrawlerKeywords(e.target.value)}
+                  disabled={crawlerActive || crawlerModeSelection === 'mock'}
+                  className="w-full text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded p-2 text-zinc-300 placeholder:text-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                />
+              </div>
+
+              {/* Action Start / Stop Button */}
+              <div className="md:col-span-3">
+                {((crawlerModeSelection === 'instagram' || crawlerModeSelection === 'facebook') && !metaTokenLoaded) ? (
+                  <button
+                    disabled={true}
+                    className="w-full py-2 rounded text-[11px] font-extrabold font-mono bg-zinc-950 border border-amber-500/20 text-amber-500/60 tracking-widest cursor-not-allowed uppercase"
+                  >
+                    AWAITING ACCESS
+                  </button>
+                ) : (crawlerModeSelection === 'telegram' && !telegramAuthLoaded) ? (
+                  <button
+                    disabled={true}
+                    className="w-full py-2 rounded text-[11px] font-extrabold font-mono bg-zinc-950 border border-rose-500/20 text-rose-500/60 tracking-widest cursor-not-allowed uppercase"
+                  >
+                    AWAITING AUTH
+                  </button>
+                ) : (
+                  <button
+                    onClick={toggleCrawler}
+                    disabled={connectionStatus !== 'online'}
+                    className={`w-full py-2 rounded text-xs font-bold font-mono transition-all cursor-pointer disabled:opacity-50 tracking-widest ${
+                      crawlerActive
+                        ? 'bg-rose-950 border border-rose-500 hover:bg-rose-900 text-white font-extrabold shadow-lg shadow-rose-900/10'
+                        : 'bg-zinc-950 border border-indigo-500 hover:bg-zinc-900 text-indigo-400 font-extrabold shadow-lg shadow-indigo-900/5'
+                    }`}
+                  >
+                    {crawlerActive ? '■ HALT STREAM' : '▶ START STREAM'}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Pending platform approval state warning banner */}
+            {(crawlerModeSelection === 'instagram' || crawlerModeSelection === 'facebook') && !metaTokenLoaded && (
+              <div className="p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-lg text-[11px] font-mono flex items-start gap-2.5">
+                <span className="text-sm">⚠️</span>
+                <div>
+                  <div className="font-bold uppercase tracking-wider text-[10px]">Awaiting Platform API Approval</div>
+                  <div className="text-zinc-400 text-[9px] mt-0.5">
+                    Instagram/Facebook crawler feeds are in review/scaffold mode. Active scraping is disabled pending Meta App Review for public content access permissions (<code className="bg-zinc-950 px-1 py-0.5 rounded text-amber-300">pages_public_content_access</code>).
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Pending Telegram authorization warning banner */}
+            {crawlerModeSelection === 'telegram' && !telegramAuthLoaded && (
+              <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-lg text-[11px] font-mono flex items-start gap-2.5">
+                <span className="text-sm">⚠️</span>
+                <div>
+                  <div className="font-bold uppercase tracking-wider text-[10px]">Awaiting Telegram Ingestion Auth</div>
+                  <div className="text-zinc-400 text-[9px] mt-0.5">
+                    Telegram MTProto client is not configured or authenticated. Please ensure <code className="bg-zinc-950 px-1 py-0.5 rounded text-rose-300">TELEGRAM_API_ID</code> & <code className="bg-zinc-950 px-1 py-0.5 rounded text-rose-300">TELEGRAM_API_HASH</code> are added to `.env` and run the interactive CLI helper <code className="bg-zinc-950 px-1 py-0.5 rounded text-rose-300">login_telegram.py</code> to verify the session.
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+          
+          {/* Trends Anomaly Chart */}
+          <div className="bg-zinc-900/40 border border-zinc-900 rounded-xl p-5 backdrop-blur-md shadow-xl flex flex-col justify-between">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-extrabold uppercase tracking-widest text-zinc-400 font-mono">
+                📈 Historical Volume & Spike Detection (30 Days)
+              </h3>
+              <span className="text-[10px] text-zinc-500 font-mono">Aggregate: DAILY WINDOWS</span>
+            </div>
+            <div className="p-2.5 rounded bg-zinc-950/60 border border-zinc-900/50">
+              {renderSVGChart()}
+            </div>
+          </div>
+
+          {/* Live Feed Controller */}
+          <div className="bg-zinc-900/40 border border-zinc-900 rounded-xl p-5 backdrop-blur-md shadow-xl flex-1 flex flex-col space-y-4">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 border-b border-zinc-900 pb-4">
+              <div>
+                <h3 className="text-xs font-extrabold uppercase tracking-widest text-zinc-400 font-mono">
+                  🚨 Real-time Social Ingestion Feed ({filteredFeed.length} matched)
+                </h3>
+                <p className="text-[10px] text-zinc-500 font-mono">Parsed via BaseCrawler queue stream</p>
+              </div>
+
+              {/* Feed reset or count stats */}
+              {postsFeed.length > 0 && (
+                <button 
+                  onClick={() => { setPostsFeed([]); setActiveAlerts([]); }}
+                  className="text-[9px] font-mono text-zinc-500 hover:text-zinc-300 uppercase underline"
+                >
+                  Clear Feed Buffer
+                </button>
+              )}
+            </div>
+
+            {/* Filter controls row */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-3 rounded-lg bg-zinc-950/60 border border-zinc-900/50">
+              {/* Threat dropdown */}
+              <div>
+                <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5 font-mono">Threat Category</label>
+                <select 
+                  value={filterThreatLevel}
+                  onChange={(e) => setFilterThreatLevel(e.target.value)}
+                  className="w-full text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded p-1 text-zinc-300"
+                >
+                  <option value="All">ALL LEVELS</option>
+                  <option value="Neutral">Neutral</option>
+                  <option value="Inflammatory">Inflammatory</option>
+                  <option value="Incitement to Violence">Incitement</option>
+                  <option value="Fake News">Fake News</option>
+                </select>
+              </div>
+
+              {/* Language dropdown */}
+              <div>
+                <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5 font-mono">Language</label>
+                <select 
+                  value={filterLanguage}
+                  onChange={(e) => setFilterLanguage(e.target.value)}
+                  className="w-full text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded p-1 text-zinc-300"
+                >
+                  <option value="All">ALL LANGUAGES</option>
+                  <option value="English">English</option>
+                  <option value="Hindi">Hindi</option>
+                  <option value="Gujarati">Gujarati</option>
+                  <option value="Hinglish">Hinglish</option>
+                  <option value="Gujlish">Gujlish</option>
+                </select>
+              </div>
+
+              {/* City dropdown */}
+              <div>
+                <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5 font-mono">City / Location</label>
+                <select 
+                  value={filterCity}
+                  onChange={(e) => setFilterCity(e.target.value)}
+                  className="w-full text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded p-1 text-zinc-300"
+                >
+                  <option value="All">ALL CITIES</option>
+                  {citiesList.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+
+              {/* Keyword text search */}
+              <div>
+                <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5 font-mono">Keyword Search</label>
+                <input 
+                  type="text"
+                  placeholder="Query text/user..."
+                  value={filterKeyword}
+                  onChange={(e) => setFilterKeyword(e.target.value)}
+                  className="w-full text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded p-1 text-zinc-300 placeholder:text-zinc-700"
+                />
+              </div>
+            </div>
+
+            {/* Scrollable feed list */}
+            <div className="flex-1 overflow-y-auto max-h-[420px] pr-2 space-y-3">
+              {filteredFeed.length === 0 ? (
+                <div className="h-48 flex flex-col items-center justify-center text-zinc-600 text-xs italic space-y-1">
+                  <span>No matching posts in console feed buffer.</span>
+                  {!crawlerActive && <span className="text-[10px] text-indigo-400 not-italic">Click "Ingest Live Stream" above to stream posts.</span>}
+                </div>
+              ) : (
+                filteredFeed.map((post) => (
+                  <div 
+                    key={post.id} 
+                    className={`p-3 rounded-lg border transition-all duration-200 flex flex-col gap-2 ${getPostCardStyle(post.threat_category)}`}
+                  >
+                    <div className="flex items-center justify-between text-[10px]">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-zinc-200 font-mono">{post.username}</span>
+                        <span className="text-zinc-600 font-mono">on</span>
+                        <span className="font-semibold text-zinc-400 uppercase tracking-wide font-mono text-[9px]">
+                          {post.platform}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded font-mono ${getThreatBadgeStyle(post.threat_category)}`}>
+                          {post.threat_category}
+                        </span>
+                        <span className="text-zinc-500 font-mono text-[9px]">
+                          {new Date(post.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-zinc-300 font-sans leading-relaxed">{post.text}</p>
+
+                    <div className="flex justify-between items-center border-t border-zinc-900/60 pt-2 text-[9px] font-mono text-zinc-500">
+                      <div>
+                        📍 {post.geo.city} <span className="text-[8px] text-zinc-600">({post.geo.latitude}, {post.geo.longitude})</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span>LANG: <strong className="text-zinc-400">{post.language.toUpperCase()}</strong></span>
+                        {post.user_profile && (
+                          <span>FOLLOWERS: <strong className="text-zinc-400">{post.user_profile.follower_count}</strong></span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* Right Side: Coordination Panels & Small Sandbox */}
+        <section className="lg:col-span-4 space-y-6">
+          
+          {/* Critical Incident Log Panel (Dedicated Region) */}
+          <div className="bg-zinc-900/40 border border-zinc-900 rounded-xl p-5 backdrop-blur-md shadow-xl flex flex-col">
+            <div className="flex items-center justify-between mb-3 border-b border-zinc-900 pb-2">
+              <h3 className="text-xs font-extrabold uppercase tracking-widest text-rose-500 font-mono flex items-center gap-1.5">
+                <span className={`w-2 h-2 rounded-full bg-rose-500 ${activeAlerts.length > 0 ? 'animate-pulse' : 'opacity-30'}`} />
+                🚨 Critical Incident Alerter
+              </h3>
+              <span className="text-[9px] font-mono text-zinc-500">
+                {activeAlerts.length} ACTIVE
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              {activeAlerts.length === 0 ? (
+                <div className="py-6 flex flex-col items-center justify-center border border-dashed border-zinc-800 rounded bg-zinc-950/20 text-emerald-500 text-[10px] font-mono tracking-wider">
+                  <span className="animate-pulse">● SYSTEMS STABLE / NO ALERTS</span>
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
+                    {activeAlerts.slice(0, 3).map((alert) => (
+                      <div 
+                        key={alert.id}
+                        className="p-3 rounded border border-rose-950/80 bg-rose-950/20 flex items-start gap-2.5 transition-all duration-300"
+                      >
+                        <div className="flex-shrink-0 w-6 h-6 rounded bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-[10px]">
+                          ⚠️
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between text-[8px] font-mono">
+                            <span className="font-bold text-rose-500 uppercase tracking-widest">
+                              {alert.type === 'cluster' ? 'CAMPAIGN' : 'POST'}
+                            </span>
+                            <span className="text-zinc-500">{alert.timestamp}</span>
+                          </div>
+                          <h4 className="text-[10px] font-bold text-white mt-0.5">{alert.title}</h4>
+                          <p className="text-[9px] text-zinc-400 mt-1 leading-relaxed font-mono truncate">{alert.description}</p>
+                          <button 
+                            onClick={() => dismissAlert(alert.id)}
+                            className="mt-1.5 text-[8px] font-bold text-zinc-300 hover:text-white bg-rose-950/40 hover:bg-rose-900 border border-rose-500/20 px-2 py-0.5 rounded cursor-pointer transition-all"
+                          >
+                            DISMISS
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {activeAlerts.length > 3 && (
+                    <div className="text-right text-[9px] font-mono text-zinc-500 pt-1 pr-1">
+                      + {activeAlerts.length - 3} more active warning flags collapsed
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Coordination Clusters Card Deck */}
+          <div className="bg-zinc-900/40 border border-zinc-900 rounded-xl p-5 backdrop-blur-md shadow-xl flex flex-col">
+            <div className="flex items-center justify-between mb-3 border-b border-zinc-900 pb-2">
+              <h3 className="text-xs font-extrabold uppercase tracking-widest text-rose-500 font-mono flex items-center gap-1">
+                🛡️ Coordinated bot networks
+              </h3>
+              <span className="text-[9px] text-zinc-500 font-mono">Size &gt;= 3</span>
+            </div>
+
+            <div className="space-y-4 max-h-[360px] overflow-y-auto pr-1">
+              {coordinationClusters.length === 0 ? (
+                <div className="h-32 flex items-center justify-center text-zinc-600 text-xs italic">
+                  No active bot campaigns flagged.
+                </div>
+              ) : (
+                coordinationClusters.map((cluster) => {
+                  const isHighThreat = cluster.suspicion_score >= 75
+                  return (
+                    <div 
+                      key={cluster.cluster_id}
+                      className={`p-3.5 rounded-lg border bg-zinc-950/60 transition-all ${
+                        isHighThreat ? 'border-rose-900/70 hover:border-rose-500/50' : 'border-zinc-800 hover:border-zinc-700'
+                      }`}
+                    >
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-xs font-extrabold uppercase text-white font-mono">{cluster.cluster_id.toUpperCase()}</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[9px] text-zinc-500 font-mono">Suspicion:</span>
+                          <span className={`text-[10px] font-bold font-mono ${isHighThreat ? 'text-rose-500' : 'text-amber-500'}`}>
+                            {cluster.suspicion_score}%
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Suspicion score bar */}
+                      <div className="h-1 w-full bg-zinc-900 rounded-full overflow-hidden mb-2.5">
+                        <div 
+                          className={`h-full rounded-full ${isHighThreat ? 'bg-rose-500' : 'bg-amber-500'}`} 
+                          style={{ width: `${cluster.suspicion_score}%` }} 
+                        />
+                      </div>
+
+                      {/* Triggered heuristics badges */}
+                      <div className="flex flex-wrap gap-1 mb-3">
+                        {cluster.heuristics.map((h, i) => (
+                          <span key={i} className="text-[8px] font-bold uppercase tracking-wider bg-zinc-900 border border-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded font-mono">
+                            {h.replace('_', ' ')}
+                          </span>
+                        ))}
+                      </div>
+
+                      {/* Members lists */}
+                      <div className="text-[9px] font-mono mb-3">
+                        <span className="text-zinc-500 block mb-1 uppercase font-bold">Bots In Campaign:</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {cluster.member_accounts.map((user, idx) => (
+                            <span key={idx} className="bg-zinc-900 text-zinc-300 px-1 py-0.5 rounded border border-zinc-850">
+                              {user}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Collapsible matched posts list */}
+                      <div>
+                        <button
+                          onClick={() => setExpandedCluster(expandedCluster === cluster.cluster_id ? null : cluster.cluster_id)}
+                          className="w-full text-center text-[10px] font-mono text-zinc-500 hover:text-white bg-zinc-900/80 hover:bg-zinc-900 py-1.5 rounded transition-all border border-zinc-900"
+                        >
+                          {expandedCluster === cluster.cluster_id ? '▲ Hide Campaign Posts' : `▼ View Coordinated Posts (${cluster.matched_posts.length})`}
+                        </button>
+
+                        {expandedCluster === cluster.cluster_id && (
+                          <div className="mt-2.5 space-y-2 border-t border-zinc-900 pt-2.5 max-h-[160px] overflow-y-auto pr-1">
+                            {cluster.matched_posts.map((mp, i) => (
+                              <div key={i} className="p-2 rounded bg-zinc-900 border border-zinc-850 space-y-1">
+                                <div className="flex justify-between text-[8px] font-mono text-zinc-500">
+                                  <span className="font-bold text-zinc-300">{mp.username}</span>
+                                  <span>{new Date(mp.timestamp).toLocaleTimeString()}</span>
+                                </div>
+                                <p className="text-[10px] text-zinc-400 font-sans leading-tight">{mp.text}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          </div>
+
+          {/* Classification Sandbox (Secondary Panel) */}
+          <div className="bg-zinc-900/40 border border-zinc-900 rounded-xl p-5 backdrop-blur-md shadow-xl flex flex-col">
+            <h3 className="text-xs font-extrabold uppercase tracking-widest text-zinc-400 mb-3 font-mono">
+              🧪 Ad-hoc NLP sandbox
+            </h3>
+            
+            <div className="space-y-3">
+              <textarea 
+                rows={2}
+                value={textInput}
+                onChange={(e) => setTextInput(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-900 rounded p-2 text-xs font-mono text-zinc-300 focus:outline-none focus:border-zinc-800"
+                placeholder="Type sample threat text..."
+              />
+
+              <button
+                onClick={handleAnalyzeText}
+                disabled={isAnalyzing || !textInput.trim() || connectionStatus !== 'online'}
+                className="w-full py-1.5 bg-indigo-950 hover:bg-indigo-900 border border-indigo-500 text-indigo-400 font-bold text-xs rounded transition-all cursor-pointer font-mono disabled:opacity-50"
+              >
+                {isAnalyzing ? 'RUNNING CLASSIFIER...' : 'RUN CLASSIFICATION'}
+              </button>
+
+              {analysisResult && (
+                <div className="p-3 rounded bg-zinc-950 border border-zinc-900 font-mono text-[10px] space-y-1.5">
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Detected Language</span>
+                    <span className="text-white font-semibold">{analysisResult.language}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Category Label</span>
+                    <span className="text-zinc-200 font-semibold">{analysisResult.threatCategory}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Confidence</span>
+                    <span className="text-indigo-400 font-semibold">{Math.round(analysisResult.confidence * 100)}%</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Sentiment Score</span>
+                    <span className={analysisResult.sentimentScore < 0.3 ? 'text-rose-400' : 'text-emerald-400'}>
+                      {analysisResult.sentimentScore}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+        
+      </main>)}
+    </div>
+  )
+}
+
+export default App
