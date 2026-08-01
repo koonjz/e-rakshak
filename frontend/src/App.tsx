@@ -98,6 +98,20 @@ function App() {
     threatScore: number;
   } | null>(null)
 
+  // Image analysis states
+  const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null)
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null)
+  const [isAnalyzingImage, setIsAnalyzingImage] = useState(false)
+  const [imageAnalysisResult, setImageAnalysisResult] = useState<{
+    status: string;
+    extracted_text?: string;
+    detected_language?: string;
+    threat_category?: string;
+    confidence?: number;
+    text_extraction_confidence?: number;
+    message?: string;
+  } | null>(null)
+
   // Filter states
   const [filterLanguage, setFilterLanguage] = useState<string>('All')
   const [filterThreatLevel, setFilterThreatLevel] = useState<string>('All')
@@ -355,6 +369,51 @@ function App() {
       console.error("Classifier API failure", err)
     } finally {
       setIsAnalyzing(false)
+    }
+  }
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      setSelectedImageFile(file)
+      if (imagePreviewUrl) {
+        URL.revokeObjectURL(imagePreviewUrl)
+      }
+      setImagePreviewUrl(URL.createObjectURL(file))
+    }
+  }
+  const handleLoadDemoMeme = () => {
+    // Create a mock File object
+    const mockBlob = new Blob(["mock-image-data"], { type: "image/png" });
+    const mockFile = new File([mockBlob], "demo_threat_meme.png", { type: "image/png" });
+    setSelectedImageFile(mockFile);
+    setImagePreviewUrl("https://placehold.co/600x150/09090b/e2e2e7?text=Threat+Meme+Demo");
+    setImageAnalysisResult(null);
+  }
+
+  const handleAnalyzeImage = async () => {
+    if (!selectedImageFile) return
+    setIsAnalyzingImage(true)
+    setImageAnalysisResult(null)
+    
+    const formData = new FormData()
+    formData.append('file', selectedImageFile)
+    
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/analyze-image', {
+        method: 'POST',
+        body: formData
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setImageAnalysisResult(data)
+      } else {
+        console.error('Failed to analyze image')
+      }
+    } catch (err) {
+      console.error('Failed to connect to image analysis API', err)
+    } finally {
+      setIsAnalyzingImage(false)
     }
   }
 
@@ -1338,6 +1397,119 @@ function App() {
                       {analysisResult.sentimentScore}
                     </span>
                   </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Ad-hoc Image & Meme OCR Sandbox */}
+          <div className="bg-zinc-900/40 border border-zinc-900 rounded-xl p-5 backdrop-blur-md shadow-xl flex flex-col">
+            <h3 className="text-xs font-extrabold uppercase tracking-widest text-zinc-400 mb-3 font-mono flex items-center gap-1.5">
+              🖼️ Ad-hoc image & meme sandbox
+            </h3>
+
+            <div className="space-y-3 font-mono text-xs">
+              {/* Image upload drag & drop box */}
+              <label className="flex flex-col items-center justify-center border-2 border-zinc-850 border-dashed rounded-lg p-4 cursor-pointer hover:border-zinc-700 transition-all bg-zinc-950/40 hover:bg-zinc-950/80">
+                <svg className="w-6 h-6 text-zinc-500 mb-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                </svg>
+                <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider text-center">
+                  {selectedImageFile ? selectedImageFile.name : 'Select or drop image'}
+                </span>
+                <span className="text-[8px] text-zinc-500 mt-0.5">Supports PNG, JPG, WEBP</span>
+                <input 
+                  type="file" 
+                  accept="image/*" 
+                  className="hidden" 
+                  onChange={handleImageChange}
+                  disabled={isAnalyzingImage}
+                />
+              </label>
+
+              {/* Load Demo Meme Helper Button */}
+              <button
+                type="button"
+                onClick={handleLoadDemoMeme}
+                disabled={isAnalyzingImage || connectionStatus !== 'online'}
+                className="w-full py-1 bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 text-zinc-500 hover:text-zinc-400 font-bold text-[9px] rounded transition-all cursor-pointer font-mono uppercase tracking-wider"
+              >
+                Load Demo Threat Meme
+              </button>
+
+              {/* Preview image */}
+              {imagePreviewUrl && (
+                <div className="relative border border-zinc-900 rounded overflow-hidden bg-zinc-950 flex justify-center p-2.5 max-h-[140px]">
+                  <img 
+                    src={imagePreviewUrl} 
+                    alt="Preview" 
+                    className="max-h-[120px] object-contain rounded" 
+                  />
+                </div>
+              )}
+
+              <button
+                onClick={handleAnalyzeImage}
+                disabled={isAnalyzingImage || !selectedImageFile || connectionStatus !== 'online'}
+                className="w-full py-1.5 bg-indigo-950 hover:bg-indigo-900 border border-indigo-500 text-indigo-400 font-bold text-xs rounded transition-all cursor-pointer font-mono disabled:opacity-50 uppercase tracking-widest"
+              >
+                {isAnalyzingImage ? 'ANALYZING MEME...' : 'ANALYZE IMAGE'}
+              </button>
+
+              {/* Graceful setup instructions if Tesseract is missing */}
+              {imageAnalysisResult && imageAnalysisResult.status === 'pending_setup' && (
+                <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-lg text-[9px] leading-relaxed">
+                  <div className="font-extrabold uppercase text-[10px] tracking-wider mb-1 flex items-center gap-1">
+                    ⚠️ Tesseract OCR Binary Missing
+                  </div>
+                  <p className="text-zinc-400 font-mono select-text whitespace-pre-wrap">
+                    {imageAnalysisResult.message}
+                  </p>
+                </div>
+              )}
+
+              {/* Extraction result displays */}
+              {imageAnalysisResult && imageAnalysisResult.status === 'success' && (
+                <div className="space-y-3 font-mono text-[10px]">
+                  <div className="p-2.5 bg-zinc-950 border border-zinc-900 rounded select-text">
+                    <span className="text-zinc-500 block uppercase font-bold tracking-wider text-[8px] mb-1">Extracted Text</span>
+                    {imageAnalysisResult.extracted_text ? (
+                      <p className="text-zinc-200 whitespace-pre-wrap font-sans break-all leading-normal">{imageAnalysisResult.extracted_text}</p>
+                    ) : (
+                      <span className="text-zinc-600 italic">No text detected in image.</span>
+                    )}
+                  </div>
+
+                  {imageAnalysisResult.extracted_text && (
+                    <div className="p-3 rounded bg-zinc-950 border border-zinc-900 space-y-1.5">
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Detected Language</span>
+                        <span className="text-white font-semibold">{imageAnalysisResult.detected_language}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Category Label</span>
+                        <span className="text-zinc-200 font-semibold">{imageAnalysisResult.threat_category}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Classifier Confidence</span>
+                        <span className="text-indigo-400 font-semibold">{Math.round((imageAnalysisResult.confidence || 0) * 100)}%</span>
+                      </div>
+                      
+                      {/* OCR confidence indicator bar */}
+                      <div className="pt-1.5 border-t border-zinc-900 space-y-1">
+                        <div className="flex justify-between">
+                          <span className="text-zinc-500">OCR Confidence</span>
+                          <span className="text-emerald-400 font-semibold">{Math.round((imageAnalysisResult.text_extraction_confidence || 0) * 100)}%</span>
+                        </div>
+                        <div className="h-1 w-full bg-zinc-900 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full rounded-full bg-emerald-500"
+                            style={{ width: `${Math.round((imageAnalysisResult.text_extraction_confidence || 0) * 100)}%` }} 
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

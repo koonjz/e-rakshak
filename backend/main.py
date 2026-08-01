@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import time
@@ -13,6 +13,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from crawler.mock import MockCrawler
 from crawler.social_stubs import YouTubeCrawler, InstagramCrawler, FacebookCrawler, TelegramCrawler
 from ml.classifier import MultilingualThreatClassifier
+from ml.image_analyzer import analyze_image
 
 app = FastAPI(title="Social Threat Analyzer API")
 
@@ -286,6 +287,15 @@ def get_crawled_posts(limit: int = 50):
             break
             
     return posts
+
+@app.post("/api/analyze-image")
+async def analyze_image_route(file: UploadFile = File(...)):
+    try:
+        contents = await file.read()
+        result = analyze_image(contents)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Image analysis failed: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
