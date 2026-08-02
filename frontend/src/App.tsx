@@ -382,14 +382,6 @@ function App() {
       setImagePreviewUrl(URL.createObjectURL(file))
     }
   }
-  const handleLoadDemoMeme = () => {
-    // Create a mock File object
-    const mockBlob = new Blob(["mock-image-data"], { type: "image/png" });
-    const mockFile = new File([mockBlob], "demo_threat_meme.png", { type: "image/png" });
-    setSelectedImageFile(mockFile);
-    setImagePreviewUrl("https://placehold.co/600x150/09090b/e2e2e7?text=Threat+Meme+Demo");
-    setImageAnalysisResult(null);
-  }
 
   const handleAnalyzeImage = async () => {
     if (!selectedImageFile) return
@@ -1426,16 +1418,6 @@ function App() {
                   disabled={isAnalyzingImage}
                 />
               </label>
-
-              {/* Load Demo Meme Helper Button */}
-              <button
-                type="button"
-                onClick={handleLoadDemoMeme}
-                disabled={isAnalyzingImage || connectionStatus !== 'online'}
-                className="w-full py-1 bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 text-zinc-500 hover:text-zinc-400 font-bold text-[9px] rounded transition-all cursor-pointer font-mono uppercase tracking-wider"
-              >
-                Load Demo Threat Meme
-              </button>
 
               {/* Preview image */}
               {imagePreviewUrl && (

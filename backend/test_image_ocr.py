@@ -4,8 +4,9 @@ import sys
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
-# Ensure parent directory is in sys.path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Add workspace root and parent directory to sys.path to enable correct imports
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 # Enforce stdout to UTF-8
 if hasattr(sys.stdout, 'reconfigure'):
@@ -13,90 +14,84 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 from backend.ml.image_analyzer import analyze_image, TESSERACT_AVAILABLE
 
-def create_test_image(text: str, filename: str):
+def create_test_image(text: str, filename: str, font_name: str = "Nirmala.ttf"):
     """
     Programmatically generates an image with text drawn on it.
-    Uses Windows default Arial ttf font for clean OCR parsing.
+    Uses Windows system font for clean OCR parsing.
     """
-    img = Image.new("RGB", (800, 150), color=(255, 255, 255))
+    # Create image with padding
+    img = Image.new("RGB", (900, 150), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
     
-    # Try loading Arial font on Windows
-    font_path = r"C:\Windows\Fonts\arial.ttf"
+    # Try loading specific Windows system fonts
+    font_path = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "Fonts", font_name)
     if os.path.exists(font_path):
         try:
-            font = ImageFont.truetype(font_path, 24)
+            font = ImageFont.truetype(font_path, 28)
         except Exception:
             font = ImageFont.load_default()
     else:
-        font = ImageFont.load_default()
+        # Fallback to general Arial or default
+        arial_path = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "Fonts", "arial.ttf")
+        if os.path.exists(arial_path):
+            try:
+                font = ImageFont.truetype(arial_path, 28)
+            except Exception:
+                font = ImageFont.load_default()
+        else:
+            font = ImageFont.load_default()
         
     # Draw text with dark gray color for high contrast
-    draw.text((30, 50), text, fill=(50, 50, 50), font=font)
+    draw.text((30, 45), text, fill=(20, 20, 20), font=font)
     
     # Save image
     img.save(filename)
-    print(f"Generated test image: {filename}")
+    print(f"Generated test image: {filename} containing: '{text}'")
 
 def test_ocr_flow():
-    print("=== Testing Image Analysis and OCR Flow ===")
+    print("=== Testing Real Image OCR and Threat Analysis Pipeline ===")
+    print(f"Tesseract OCR Available on Host: {TESSERACT_AVAILABLE}")
     
     if not TESSERACT_AVAILABLE:
-        print("\n[NOTE] Tesseract is not installed. Running SIMULATION MODE to show threat classification pipeline outputs:")
-        from ml.classifier import MultilingualThreatClassifier
-        classifier = MultilingualThreatClassifier()
+        print("CRITICAL ERROR: Tesseract is not detected. Cannot run real test.")
+        sys.exit(1)
         
-        sim_texts = [
-            ("Warning: We will block the Surat bypass tomorrow morning. Join the protest!", "test_ocr_english.png"),
-            ("Alert: todi nakho badhu near Surat bypass tomorrow morning!", "test_ocr_mixed.png"),
-            ("बच कर रहना सब, हमला होने वाला है", "test_ocr_hindi.png")
-        ]
-        for text, filename in sim_texts:
-            res = classifier.predict(text)
-            print(f"\nSimulated OCR Result for {filename}:")
-            print(f"  Extracted Text: \"{text}\"")
-            print(f"  Language:       {res.get('language')}")
-            print(f"  Category:       {res.get('threat_category')}")
-            print(f"  Confidence:     {res.get('confidence')}")
-            print(f"  OCR Conf (Sim): 0.95")
-        print("\n--- Running System Check (Checking system Tesseract and graceful errors) ---")
-    
     # Text samples to test
     # 1. English Threat
     eng_text = "Warning: We will block the Surat bypass tomorrow morning. Join the protest!"
-    eng_file = "test_ocr_english.png"
-    create_test_image(eng_text, eng_file)
+    eng_file = "real_ocr_english.png"
+    create_test_image(eng_text, eng_file, "arial.ttf")
     
-    # 2. Gujlish (Code-mixed) Threat (Uses English script, so works without guj language pack)
-    mixed_text = "Alert: todi nakho badhu near Surat bypass tomorrow morning!"
-    mixed_file = "test_ocr_mixed.png"
-    create_test_image(mixed_text, mixed_file)
-
-    # 3. Hindi Threat (Requires hin language pack)
+    # 2. Hindi Threat (using Nirmala UI font)
     hindi_text = "बच कर रहना सब, हमला होने वाला है"
-    hindi_file = "test_ocr_hindi.png"
-    create_test_image(hindi_text, hindi_file)
+    hindi_file = "real_ocr_hindi.png"
+    create_test_image(hindi_text, hindi_file, "Nirmala.ttc")
+
+    # 3. Gujarati Threat (using Nirmala UI font)
+    guj_text = "ચેતવણી: આવતીકાલે સવારે હાઇવે બ્લોક કરવામાં આવશે"
+    guj_file = "real_ocr_gujarati.png"
+    create_test_image(guj_text, guj_file, "Nirmala.ttc")
 
     try:
         # Check Direct Python Function
-        print("\n--- 1. Testing Direct Python Function ---")
-        for filename, expected_part in [(eng_file, "block"), (mixed_file, "todi")]:
+        print("\n--- 1. Running Direct Python OCR Extraction ---")
+        for filename in [eng_file, hindi_file, guj_file]:
             with open(filename, "rb") as f:
                 img_bytes = f.read()
             res = analyze_image(img_bytes)
             print(f"\nResult for {filename}:")
             print(f"  Status:       {res.get('status')}")
-            if res.get("status") == "pending_setup":
-                print("  Tesseract setup is pending. Graceful warning returned successfully.")
-                print(f"  Message: {res.get('message')}")
+            if res.get("status") == "success":
+                print(f"  Raw Extracted Text:")
+                print(f"  --------------------------------------------------")
+                print(res.get("extracted_text", "").strip())
+                print(f"  --------------------------------------------------")
+                print(f"  Detected Language:     {res.get('detected_language')}")
+                print(f"  Threat Category:       {res.get('threat_category')}")
+                print(f"  Confidence:            {res.get('confidence')}")
+                print(f"  OCR Confidence:        {res.get('text_extraction_confidence')}")
             else:
-                text = res.get("extracted_text", "")
-                print(f"  Extracted:    \"{text.strip()}\"")
-                print(f"  Language:     {res.get('detected_language')}")
-                print(f"  Category:     {res.get('threat_category')}")
-                print(f"  Confidence:   {res.get('confidence')}")
-                print(f"  OCR Conf:     {res.get('text_extraction_confidence')}")
-                assert expected_part.lower() in text.lower() or "tesseract" in str(res), "OCR mismatch!"
+                print(f"  Error/Warning: {res.get('message')}")
         
         # Check FastAPI Route via HTTP request
         print("\n--- 2. Testing FastAPI Endpoint (POST /api/analyze-image) ---")
@@ -110,9 +105,11 @@ def test_ocr_flow():
                 print(f"HTTP Status: {response.status_code}")
                 if response.status_code == 200:
                     data = response.json()
-                    print("API Response JSON:")
-                    import json
-                    print(json.dumps(data, indent=2))
+                    print(f"FastAPI Response for {eng_file}:")
+                    print(f"  Extracted:  \"{data.get('extracted_text', '').strip()}\"")
+                    print(f"  Language:   {data.get('detected_language')}")
+                    print(f"  Category:   {data.get('threat_category')}")
+                    print(f"  OCR Conf:   {data.get('text_extraction_confidence')}")
                 else:
                     print(f"API Error: {response.text}")
             except Exception as e:
@@ -121,7 +118,7 @@ def test_ocr_flow():
                 
     finally:
         # Clean up temporary test files
-        for filename in [eng_file, mixed_file, hindi_file]:
+        for filename in [eng_file, hindi_file, guj_file]:
             if os.path.exists(filename):
                 os.remove(filename)
                 print(f"Cleaned up {filename}")

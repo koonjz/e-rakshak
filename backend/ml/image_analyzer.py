@@ -7,7 +7,8 @@ from PIL import Image
 import pytesseract
 from pytesseract import Output, TesseractError
 
-# Add parent directory to sys.path to enable relative imports
+# Add parent directory and workspace root to sys.path to enable correct imports
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from ml.classifier import MultilingualThreatClassifier
 
@@ -35,19 +36,6 @@ def analyze_image(image_bytes: bytes) -> Dict[str, Any]:
     calculates extraction confidence, and routes extracted text
     through the threat classifier pipeline.
     """
-    # Check if simulation mode is requested
-    if os.getenv("SIMULATE_OCR", "false").lower() == "true":
-        simulated_text = "Warning: We will block the Surat bypass tomorrow morning. Join the protest!"
-        classification = classifier.predict(simulated_text)
-        return {
-            "status": "success",
-            "extracted_text": simulated_text,
-            "detected_language": classification.get("language", "English"),
-            "threat_category": classification.get("threat_category", "Neutral"),
-            "confidence": classification.get("confidence", 0.0),
-            "text_extraction_confidence": 0.95,
-            "is_simulated": True
-        }
 
     if not TESSERACT_AVAILABLE:
         return {
