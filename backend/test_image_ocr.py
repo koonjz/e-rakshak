@@ -14,13 +14,13 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 from backend.ml.image_analyzer import analyze_image, TESSERACT_AVAILABLE
 
-def create_test_image(text: str, filename: str, font_name: str = "Nirmala.ttf"):
+def create_test_image(text: str, filename: str, font_name: str = "Nirmala.ttc"):
     """
     Programmatically generates an image with text drawn on it.
     Uses Windows system font for clean OCR parsing.
     """
     # Create image with padding
-    img = Image.new("RGB", (900, 150), color=(255, 255, 255))
+    img = Image.new("RGB", (1200, 150), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
     
     # Try loading specific Windows system fonts
