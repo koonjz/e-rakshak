@@ -5,6 +5,8 @@ from typing import Dict, Any
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.pipeline import make_pipeline
+from sklearn.linear_model import LogisticRegression
+import numpy as np
 
 # ==============================================================================
 # PRODUCTION UPGRADE PATH NOTE:
@@ -30,7 +32,9 @@ class MultilingualThreatClassifier:
             self.data_path = data_path
             
         self.lang_model = None
-        self.threat_model = None
+        self.threat_model_word_nb = None
+        self.threat_model_word_lr = None
+        self.threat_model_char_lr = None
         
         # Complete language-specific threat rules & override keywords
         self.threat_rules = {
@@ -143,12 +147,24 @@ class MultilingualThreatClassifier:
         )
         self.lang_model.fit(texts, languages)
         
-        # 2. Train Threat Category Pipeline (Word N-Grams perform best for topic classification)
-        self.threat_model = make_pipeline(
-            TfidfVectorizer(analyzer="word", ngram_range=(1, 2), stop_words=None, max_features=8000),
+        # 2. Train Ensemble Threat Category Pipelines (Soft voting base models)
+        self.threat_model_word_nb = make_pipeline(
+            TfidfVectorizer(analyzer="word", ngram_range=(1, 2), max_features=8000),
             MultinomialNB()
         )
-        self.threat_model.fit(texts, categories)
+        self.threat_model_word_lr = make_pipeline(
+            TfidfVectorizer(analyzer="word", ngram_range=(1, 2), max_features=8000),
+            LogisticRegression(max_iter=1000)
+        )
+        self.threat_model_char_lr = make_pipeline(
+            TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), max_features=15000),
+            LogisticRegression(max_iter=1000)
+        )
+        
+        self.threat_model_word_nb.fit(texts, categories)
+        self.threat_model_word_lr.fit(texts, categories)
+        self.threat_model_char_lr.fit(texts, categories)
+        
         print("Threat classifier pipelines trained successfully.")
 
     def _apply_rules(self, text: str, detected_lang: str) -> str:
@@ -191,7 +207,7 @@ class MultilingualThreatClassifier:
             }
             
         # Fallback if model not trained
-        if self.lang_model is None or self.threat_model is None:
+        if self.lang_model is None or self.threat_model_word_nb is None:
             return {
                 "language": "english",
                 "sentiment_score": 0.5,
@@ -202,9 +218,13 @@ class MultilingualThreatClassifier:
         # 1. Predict Language
         lang = self.lang_model.predict([text])[0]
         
-        # 2. Predict Threat Category (Model probabilities)
-        threat_probs = self.threat_model.predict_proba([text])[0]
-        classes = self.threat_model.classes_
+        # 2. Predict Threat Category (Ensemble Average Model probabilities)
+        p_word_nb = self.threat_model_word_nb.predict_proba([text])[0]
+        p_word_lr = self.threat_model_word_lr.predict_proba([text])[0]
+        p_char_lr = self.threat_model_char_lr.predict_proba([text])[0]
+        
+        threat_probs = (p_word_nb + p_word_lr + p_char_lr) / 3.0
+        classes = self.threat_model_word_nb.classes_
         prob_map = dict(zip(classes, threat_probs))
         
         predicted_category = max(prob_map, key=prob_map.get)
