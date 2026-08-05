@@ -32,6 +32,14 @@ The **Social Threat Analyzer** is a real-time, multilingual social media monitor
 
 ---
 
+## 3.5 Ingestion & Query Performance
+
+We executed a dedicated load stress-test ([test_load.py](file:///c:/Users/kunjp/OneDrive/Desktop/Experiments/social-threat-analyzer/backend/test_load.py)) evaluating the system under volume (full results in [PERFORMANCE.md](file:///c:/Users/kunjp/OneDrive/Desktop/Experiments/social-threat-analyzer/docs/PERFORMANCE.md)):
+* **Ingestion Rate**: Processes a burst of 500 posts in **2.58 seconds** (throughput: **194.15 posts/second sustained**), with an average per-post classification latency of **5.15 ms**.
+* **Query Latency Scaling**: Trends queries remain sub-second (under **56 ms** at 2,000 posts). The Bot Coordination and Incidents endpoints were optimized using **overlapping 10-minute/20-minute time-bucket groupings** to reduce pairwise comparison scope from $O(N^2)$ to $O(N \cdot M)$, yielding a **5x latency reduction** to **1.15 seconds** and **1.27 seconds** respectively at 2,000 posts.
+
+---
+
 ## 4. Inherent Limitations
 
 *   **OCR Image Parsing**: Indic-script OCR (Hindi/Gujarati) on visually complex or stylized memes with outline fonts and background noise is currently highly unreliable due to character segmentation failures, whereas Latin-script OCR is robust. To resolve this in production, a dedicated pre-processing layer (adaptive binarization and deep learning text-region cropping) is required.

@@ -81,38 +81,71 @@ def detect_coordinated_behavior(posts: List[Dict[str, Any]]) -> List[Dict[str, A
     adj = defaultdict(list)
     edge_types = defaultdict(set) # key: (i, j) edge index pair -> values: set of heuristic strings
     
-    for i in range(n):
-        for j in range(i + 1, n):
-            p1 = parsed_posts[i]
-            p2 = parsed_posts[j]
-            
-            # Coordination requires different user accounts
-            if p1["username"] == p2["username"]:
-                continue
+    # Bucketize posts by timestamp relative to min time to optimize comparisons
+    times = [p["time"] for p in parsed_posts]
+    if not times:
+        return []
+    epoch = min(times)
+    
+    # 20-minute buckets with 10-minute overlap step
+    bucket_width = 1200.0  # 20 minutes in seconds
+    bucket_step = 600.0    # 10 minutes in seconds
+    buckets = defaultdict(list)
+    
+    for idx, p in enumerate(parsed_posts):
+        rel_seconds = (p["time"] - epoch).total_seconds()
+        k1 = int(rel_seconds // bucket_step)
+        k2 = k1 - 1
+        buckets[k1].append(idx)
+        buckets[k2].append(idx)
+        
+    compared_pairs = set()
+    
+    for bucket_indices in buckets.values():
+        n_bucket = len(bucket_indices)
+        for i_local in range(n_bucket):
+            for j_local in range(i_local + 1, n_bucket):
+                idx_i = bucket_indices[i_local]
+                idx_j = bucket_indices[j_local]
                 
-            time_diff = abs((p1["time"] - p2["time"]).total_seconds())
-            text_sim = jaccard_similarity(p1["words"], p2["words"])
-            
-            is_connected = False
-            reasons = set()
-            
-            # Heuristic 1: Near-duplicate/templated text posted within 10 minutes
-            if text_sim >= 0.70 and time_diff <= 600:
-                is_connected = True
-                reasons.add("templated_text")
-                
-            # Heuristic 2: Synchronized posting within 10 seconds
-            # To avoid random noise, we make sure they share some similarity or are both non-neutral
-            if time_diff <= 10:
-                has_semantic_link = (text_sim > 0.15) or (p1["threat_category"] != "neutral" and p2["threat_category"] != "neutral")
-                if has_semantic_link:
-                    is_connected = True
-                    reasons.add("synchronized_burst")
+                # Coordination requires different user accounts
+                if parsed_posts[idx_i]["username"] == parsed_posts[idx_j]["username"]:
+                    continue
                     
-            if is_connected:
-                adj[i].append(j)
-                adj[j].append(i)
-                edge_types[(min(i, j), max(i, j))].update(reasons)
+                pair_key = (min(idx_i, idx_j), max(idx_i, idx_j))
+                if pair_key in compared_pairs:
+                    continue
+                compared_pairs.add(pair_key)
+                
+                i, j = pair_key
+                p1 = parsed_posts[i]
+                p2 = parsed_posts[j]
+                
+                time_diff = abs((p1["time"] - p2["time"]).total_seconds())
+                if time_diff > 600:
+                    continue
+                    
+                text_sim = jaccard_similarity(p1["words"], p2["words"])
+                
+                is_connected = False
+                reasons = set()
+                
+                # Heuristic 1: Near-duplicate/templated text posted within 10 minutes
+                if text_sim >= 0.70 and time_diff <= 600:
+                    is_connected = True
+                    reasons.add("templated_text")
+                    
+                # Heuristic 2: Synchronized posting within 10 seconds
+                if time_diff <= 10:
+                    has_semantic_link = (text_sim > 0.15) or (p1["threat_category"] != "neutral" and p2["threat_category"] != "neutral")
+                    if has_semantic_link:
+                      is_connected = True
+                      reasons.add("synchronized_burst")
+                      
+                if is_connected:
+                    adj[i].append(j)
+                    adj[j].append(i)
+                    edge_types[pair_key].update(reasons)
                 
     # Find connected components in the graph
     visited = [False] * n
