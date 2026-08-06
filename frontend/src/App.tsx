@@ -57,6 +57,481 @@ interface AlertItem {
 // Global set to track already-alerted unique post/cluster IDs across polling cycles
 const globalAlertedIds = new Set<string>();
 
+function CoordinationNetworkGraph() {
+  const [networkData, setNetworkData] = useState<{ nodes: any[]; edges: any[] }>({ nodes: [], edges: [] });
+  const [neo4jAvailable, setNeo4jAvailable] = useState<boolean | null>(null);
+  const [selectedNode, setSelectedNode] = useState<any | null>(null);
+  const [hoveredNode, setHoveredNode] = useState<any | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const draggingNodeRef = useRef<any | null>(null);
+
+  const fetchGraphData = async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/network-graph');
+      if (res.ok) {
+        const data = await res.json();
+        setNeo4jAvailable(!!data.neo4j_available);
+        if (data.neo4j_available && data.nodes) {
+          // Initialize coordinates if not set, keep existing if already there to avoid jarring jumps
+          const width = 720;
+          const height = 480;
+          setNetworkData(prev => {
+            const nodes = data.nodes.map((n: any) => {
+              const prevNode = prev.nodes.find(pn => pn.id === n.id);
+              return {
+                ...n,
+                x: prevNode ? prevNode.x : width / 2 + (Math.random() - 0.5) * 300,
+                y: prevNode ? prevNode.y : height / 2 + (Math.random() - 0.5) * 300,
+                vx: prevNode ? prevNode.vx : 0,
+                vy: prevNode ? prevNode.vy : 0
+              };
+            });
+            return { nodes, edges: data.edges || [] };
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch graph data", err);
+      setNeo4jAvailable(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchGraphData();
+    const interval = setInterval(fetchGraphData, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || networkData.nodes.length === 0) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let animationFrameId: number;
+    const nodes = networkData.nodes;
+    const edges = networkData.edges;
+
+    const width = canvas.width;
+    const height = canvas.height;
+
+    // Physics parameters
+    const repulsion = 1200;
+    const springLength = 140;
+    const springK = 0.05;
+    const gravity = 0.04;
+    const damping = 0.82;
+
+    const tick = () => {
+      // 1. Repulsion force between pairs
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const n1 = nodes[i];
+          const n2 = nodes[j];
+          const dx = n2.x - n1.x;
+          const dy = n2.y - n1.y;
+          const distSq = dx * dx + dy * dy || 1;
+          const dist = Math.sqrt(distSq);
+
+          if (dist < 320) {
+            let currentRepulsion = repulsion;
+            const isN1Coordinated = n1.suspicion >= 75;
+            const isN2Coordinated = n2.suspicion >= 75;
+            
+            if (isN1Coordinated && isN2Coordinated) {
+              const isConnected = edges.some(e => 
+                (e.from === n1.id && e.to === n2.id) || 
+                (e.from === n2.id && e.to === n1.id)
+              );
+              if (!isConnected) {
+                // Drastically push apart different clusters so they separate visually
+                currentRepulsion = repulsion * 7;
+              } else {
+                // Keep same-cluster nodes closer but distinct
+                currentRepulsion = repulsion * 0.75;
+              }
+            } else if (isN1Coordinated || isN2Coordinated) {
+              // Push coordinated clusters away from background noise
+              currentRepulsion = repulsion * 4;
+            } else {
+              // Faded background nodes repel each other gently
+              currentRepulsion = repulsion * 0.3;
+            }
+
+            const force = currentRepulsion / distSq;
+            const fx = (dx / dist) * force;
+            const fy = (dy / dist) * force;
+
+            n1.vx -= fx;
+            n1.vy -= fy;
+            n2.vx += fx;
+            n2.vy += fy;
+          }
+        }
+      }
+
+      // 2. Attractive force along edges (springs)
+      edges.forEach((edge) => {
+        const n1 = nodes.find(n => n.id === edge.from);
+        const n2 = nodes.find(n => n.id === edge.to);
+        if (!n1 || !n2) return;
+
+        const dx = n2.x - n1.x;
+        const dy = n2.y - n1.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+        const displacement = dist - springLength;
+        const force = springK * displacement;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+
+        n1.vx += fx;
+        n1.vy += fy;
+        n2.vx -= fx;
+        n2.vy -= fy;
+      });
+
+      // 3. Gravity center force & update node coordinates
+      const cx = width / 2;
+      const cy = height / 2;
+
+      nodes.forEach((node) => {
+        if (node === draggingNodeRef.current) return;
+
+        const dx = cx - node.x;
+        const dy = cy - node.y;
+
+        node.vx += dx * gravity;
+        node.vy += dy * gravity;
+
+        node.vx *= damping;
+        node.vy *= damping;
+        
+        node.x += node.vx;
+        node.y += node.vy;
+
+        // Keep inside bounds
+        node.x = Math.max(30, Math.min(width - 30, node.x));
+        node.y = Math.max(30, Math.min(height - 30, node.y));
+      });
+
+      // 4. Draw Layout
+      ctx.clearRect(0, 0, width, height);
+
+      // Draw grid backing
+      ctx.strokeStyle = '#0e0e11';
+      ctx.lineWidth = 1;
+      const step = 40;
+      for (let x = 0; x < width; x += step) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+      }
+      for (let y = 0; y < height; y += step) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+      }
+
+      // Draw Edges
+      edges.forEach((edge) => {
+        const n1 = nodes.find(n => n.id === edge.from);
+        const n2 = nodes.find(n => n.id === edge.to);
+        if (!n1 || !n2) return;
+
+        ctx.beginPath();
+        ctx.moveTo(n1.x, n1.y);
+        ctx.lineTo(n2.x, n2.y);
+        
+        if (edge.suspicion_score >= 75) {
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.45)'; // Rose
+          ctx.lineWidth = 2.5;
+        } else {
+          ctx.strokeStyle = 'rgba(245, 158, 11, 0.35)'; // Amber
+          ctx.lineWidth = 1.5;
+        }
+        ctx.stroke();
+      });
+
+      // Draw Nodes
+      nodes.forEach((node) => {
+        const isHovered = hoveredNode && hoveredNode.id === node.id;
+        const isSelected = selectedNode && selectedNode.id === node.id;
+        const isCoordinated = node.suspicion >= 75;
+        
+        if (!isCoordinated) {
+          // Render background noise node small and faded, with no halos or text
+          const radius = 3;
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI);
+          ctx.fillStyle = 'rgba(63, 63, 70, 0.15)'; // Very faint Zinc
+          ctx.fill();
+          return;
+        }
+
+        const radius = 12 + Math.min(node.post_count * 2.5, 12);
+        
+        // Glowing ring for highly suspicious accounts
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, radius + 6, 0, 2 * Math.PI);
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
+        ctx.fill();
+        
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, radius + 4, 0, 2 * Math.PI);
+        ctx.strokeStyle = 'rgba(239, 68, 68, 0.45)';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+
+        // Selection ring
+        if (isSelected) {
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, radius + 5, 0, 2 * Math.PI);
+          ctx.strokeStyle = '#6366f1'; // Indigo 500
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+        } else if (isHovered) {
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, radius + 4, 0, 2 * Math.PI);
+          ctx.strokeStyle = '#a5b4fc'; // Indigo 300
+          ctx.lineWidth = 1.8;
+          ctx.stroke();
+        }
+
+        // Platform center dot coloring
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI);
+        let platformColor = '#71717a';
+        switch (node.platform.toLowerCase()) {
+          case 'x': platformColor = '#ffffff'; break;
+          case 'youtube': platformColor = '#ef4444'; break;
+          case 'instagram': platformColor = '#ec4899'; break;
+          case 'facebook': platformColor = '#3b82f6'; break;
+          case 'telegram': platformColor = '#06b6d4'; break;
+        }
+        ctx.fillStyle = platformColor;
+        ctx.fill();
+
+        // Node Label
+        ctx.font = isHovered ? 'bold 10px monospace' : '9px monospace';
+        ctx.fillStyle = isHovered ? '#ffffff' : '#e4e4e7';
+        ctx.textAlign = 'center';
+        ctx.fillText(node.label, node.x, node.y - radius - 8);
+      });
+
+      animationFrameId = requestAnimationFrame(tick);
+    };
+
+    animationFrameId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [networkData, hoveredNode, selectedNode]);
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    if (draggingNodeRef.current) {
+      draggingNodeRef.current.x = x;
+      draggingNodeRef.current.y = y;
+      return;
+    }
+
+    let foundHover: any = null;
+    for (const node of networkData.nodes) {
+      if (node.suspicion < 75) continue; // Ignore non-coordinated background accounts
+      const radius = 12 + Math.min(node.post_count * 2.5, 12);
+      const dx = node.x - x;
+      const dy = node.y - y;
+      if (dx * dx + dy * dy <= (radius + 8) * (radius + 8)) {
+        foundHover = node;
+        break;
+      }
+    }
+    setHoveredNode(foundHover);
+  };
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    let clickedNode: any = null;
+    for (const node of networkData.nodes) {
+      if (node.suspicion < 75) continue; // Ignore non-coordinated background accounts
+      const radius = 12 + Math.min(node.post_count * 2.5, 12);
+      const dx = node.x - x;
+      const dy = node.y - y;
+      if (dx * dx + dy * dy <= (radius + 8) * (radius + 8)) {
+        clickedNode = node;
+        break;
+      }
+    }
+
+    if (clickedNode) {
+      setSelectedNode(clickedNode);
+      draggingNodeRef.current = clickedNode;
+      clickedNode.vx = 0;
+      clickedNode.vy = 0;
+    } else {
+      setSelectedNode(null);
+    }
+  };
+
+  const handleMouseUp = () => {
+    draggingNodeRef.current = null;
+  };
+
+  const getCoordinatesWith = () => {
+    if (!selectedNode) return [];
+    return networkData.edges
+      .filter(e => e.from === selectedNode.id || e.to === selectedNode.id)
+      .map(e => {
+        const partner = e.from === selectedNode.id ? e.to : e.from;
+        return {
+          username: partner,
+          heuristic: e.heuristic,
+          suspicion: e.suspicion_score
+        };
+      });
+  };
+
+  const partners = getCoordinatesWith();
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 w-full">
+      {/* Network Canvas Panel */}
+      <div className="lg:col-span-8 bg-zinc-900/40 border border-zinc-900 rounded-xl p-5 backdrop-blur-md shadow-xl flex flex-col">
+        <div className="flex justify-between items-center mb-3 border-b border-zinc-900 pb-2">
+          <div>
+            <h3 className="text-xs font-extrabold uppercase tracking-widest text-zinc-400 font-mono flex items-center gap-2">
+              🕸️ Coordinated Campaign Network Graph
+            </h3>
+            <p className="text-[10px] text-zinc-500 font-mono">
+              Visualizes (:Account)-[:COORDINATES_WITH]-{"->"} (:Account) relationships synced to Neo4j database
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`w-1.5 h-1.5 rounded-full ${neo4jAvailable ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500 animate-pulse'}`} />
+            <span className="text-[10px] font-mono text-zinc-500">
+              NEO4J: {neo4jAvailable ? 'ONLINE' : 'OFFLINE'}
+            </span>
+          </div>
+        </div>
+
+        {neo4jAvailable === false ? (
+          <div className="h-[480px] border border-dashed border-zinc-800 rounded bg-zinc-950/20 flex flex-col items-center justify-center p-6 text-center space-y-4">
+            <div className="w-12 h-12 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-lg text-rose-500">
+              ⚠️
+            </div>
+            <div className="max-w-md">
+              <h4 className="text-xs font-bold text-white uppercase tracking-wider font-mono">Neo4j Graph Database Unreachable</h4>
+              <p className="text-[10px] text-zinc-400 font-mono mt-2 leading-relaxed">
+                The Graph Database sync is currently offline. Please configure your <code className="text-indigo-400 font-bold bg-zinc-900 px-1 py-0.5 rounded">NEO4J_URI</code>, <code className="text-indigo-400 font-bold bg-zinc-900 px-1 py-0.5 rounded">NEO4J_USERNAME</code>, and <code className="text-indigo-400 font-bold bg-zinc-900 px-1 py-0.5 rounded">NEO4J_PASSWORD</code> inside your <code className="text-white">.env</code> file and restart the API server.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-zinc-950 border border-zinc-900 rounded overflow-hidden flex justify-center items-center h-[480px]">
+            <canvas
+              ref={canvasRef}
+              width={720}
+              height={480}
+              onMouseMove={handleMouseMove}
+              onMouseDown={handleMouseDown}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              className="w-full h-full max-h-[480px] max-w-[720px] cursor-grab active:cursor-grabbing"
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Selected Account Sidebar */}
+      <div className="lg:col-span-4 bg-zinc-900/40 border border-zinc-900 rounded-xl p-5 backdrop-blur-md shadow-xl flex flex-col h-[550px]">
+        <div className="mb-3 border-b border-zinc-900 pb-2">
+          <h3 className="text-xs font-extrabold uppercase tracking-widest text-indigo-400 font-mono">
+            ℹ️ Node Inspector
+          </h3>
+        </div>
+
+        {!selectedNode ? (
+          <div className="flex-1 flex flex-col items-center justify-center text-center p-4 text-zinc-500 text-xs italic font-mono space-y-2">
+            <svg className="w-8 h-8 text-zinc-700 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122"></path>
+            </svg>
+            <span>Click any account node on the left to inspect network coordination relationships.</span>
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col space-y-4 font-mono text-[11px] overflow-y-auto pr-1">
+            {/* Account Card */}
+            <div className="p-3.5 bg-zinc-950 border border-zinc-900 rounded-lg space-y-2.5">
+              <div className="flex justify-between items-center">
+                <span className="font-bold text-white text-xs break-all">{selectedNode.id}</span>
+                <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded uppercase ${
+                  selectedNode.platform.toLowerCase() === 'youtube' ? 'bg-red-500/10 text-red-400 border border-red-500/20' :
+                  selectedNode.platform.toLowerCase() === 'telegram' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20' :
+                  selectedNode.platform.toLowerCase() === 'instagram' ? 'bg-pink-500/10 text-pink-400 border border-pink-500/20' :
+                  'bg-zinc-800 text-zinc-400'
+                }`}>
+                  {selectedNode.platform}
+                </span>
+              </div>
+              
+              <div className="space-y-1 text-zinc-400">
+                <div className="flex justify-between">
+                  <span>Ingested Posts:</span>
+                  <span className="text-white font-semibold">{selectedNode.post_count}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Max Suspicion score:</span>
+                  <span className={`font-semibold ${selectedNode.suspicion >= 75 ? 'text-rose-500' : 'text-amber-500'}`}>
+                    {selectedNode.suspicion}%
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Coordination details */}
+            <div className="flex-1 flex flex-col space-y-2">
+              <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">
+                Coordinated Account Links ({partners.length})
+              </span>
+              
+              {partners.length === 0 ? (
+                <div className="flex-1 py-6 flex items-center justify-center border border-dashed border-zinc-800 rounded text-zinc-600 italic">
+                  No coordination links detected.
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto space-y-2 max-h-[260px] pr-1">
+                  {partners.map((p: any, idx: number) => (
+                    <div key={idx} className="p-3 bg-zinc-950 border border-zinc-900 rounded-lg space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-zinc-200 font-bold break-all">{p.username}</span>
+                        <span className="text-rose-500 text-[10px] font-bold">{p.suspicion}%</span>
+                      </div>
+                      <div className="text-[9px] text-zinc-500 leading-normal">
+                        <span className="text-zinc-600 font-bold block uppercase text-[8px] tracking-wide">Triggered Heuristics:</span>
+                        <span className="text-zinc-400 font-mono italic break-words">{p.heuristic}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   // Connection states
   const [connectionStatus, setConnectionStatus] = useState<'checking' | 'online' | 'offline'>('checking')
@@ -78,7 +553,7 @@ function App() {
   const [activeAlerts, setActiveAlerts] = useState<AlertItem[]>([])
   
   // Incidents states
-  const [activeTab, setActiveTab] = useState<'monitor' | 'incidents'>('monitor')
+  const [activeTab, setActiveTab] = useState<'monitor' | 'incidents' | 'network'>('monitor')
   const [incidents, setIncidents] = useState<any[]>([])
   const [expandedIncident, setExpandedIncident] = useState<string | null>(null)
   
@@ -755,6 +1230,16 @@ function App() {
             {incidents.length}
           </span>
         </button>
+        <button
+          onClick={() => setActiveTab('network')}
+          className={`px-6 py-2.5 font-mono text-xs font-bold uppercase tracking-widest border-b-2 cursor-pointer transition-all flex items-center gap-2 ${
+            activeTab === 'network' 
+              ? 'border-indigo-500 text-indigo-400 bg-indigo-950/10' 
+              : 'border-transparent text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          🕸️ Coordination Network
+        </button>
       </div>
 
       {/* Main Content Layout */}
@@ -928,6 +1413,10 @@ function App() {
               )}
             </div>
           </div>
+        </main>
+      ) : activeTab === 'network' ? (
+        <main className="flex-1 max-w-7xl mx-auto px-6 py-6 w-full relative z-10">
+          <CoordinationNetworkGraph />
         </main>
       ) : (
         <main className="flex-1 max-w-7xl mx-auto px-6 py-6 w-full grid grid-cols-1 lg:grid-cols-12 gap-6 relative z-10">

@@ -5,7 +5,7 @@ This document provides a comprehensive summary of the Social Threat Analyzer imp
 ---
 
 ## 1. Project Overview
-The **Social Threat Analyzer** is a real-time, multilingual social media monitoring platform designed to ingest, analyze, and escalate potential public safety threats in Gujarat. It couples a high-performance **React + Vite (TypeScript)** frontend dashboard with a **FastAPI (Python)** backend that hosts modular social media crawlers, time-series trend analyzers, bot coordination campaign detection clusters, and a hybrid NLP/OCR text classifier.
+The **Social Threat Analyzer** is a real-time, multilingual social media monitoring platform designed to ingest, analyze, and escalate potential public safety threats in Gujarat. It couples a high-performance **React + Vite (TypeScript)** frontend dashboard with a **FastAPI (Python)** backend that hosts modular social media crawlers, time-series trend analyzers, bot coordination campaign detection clusters, an interactive **Neo4j AuraDB coordination network graph**, and a hybrid NLP/OCR text classifier.
 
 ---
 

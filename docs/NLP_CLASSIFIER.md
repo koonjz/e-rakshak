@@ -9,7 +9,9 @@ The threat analyzer uses a hybrid classification model:
    * **Model A**: Multinomial Naive Bayes (`MultinomialNB`) on word-level TF-IDF (1-2 grams) features.
    * **Model B**: Logistic Regression (`LogisticRegression`) on the same word-level TF-IDF features.
    * **Model C**: Logistic Regression (`LogisticRegression`) on character-level TF-IDF (3-5 grams) features (specifically helping capture spelling variants and code-mixed Hinglish/Gujlish slang that word-level features miss).
-2. **Rule-Based Override Layer**: A heuristic regex pattern-matcher that intercepts predictions. If a known high-risk keyword or phrase is matched (such as specific incitement terms in English, Hinglish, Gujlish, Hindi, or Gujarati), the classification is overridden to a high-severity threat category with a standard `0.90` confidence.
+2. **Rule-Based Override Layer**: A heuristic regex pattern-matcher that intercepts predictions. If a known high-risk keyword or phrase is matched (such as specific incitement terms in English, Hinglish, Gujlish, Hindi, or Gujarati), the classification is overridden to a high-severity threat category with a standard `0.90` confidence. 
+   
+   *Transliteration & Slang Expansion*: The rule-based layer has been expanded with robust regex patterns to handle spelling and transliteration variants of safety-critical words in Hinglish and Gujlish (including repeated characters, elongated vowels, and character deletions). It also incorporates a expanded set of safety-critical slang terms covering protest/agitation terminology, communal-tension trigger words, and abusive/derogatory expressions commonly used in online harassment. These terms are restricted to the codebase logic to prevent evasion attempts.
 
 ---
 

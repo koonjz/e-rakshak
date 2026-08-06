@@ -57,7 +57,29 @@ class AppState:
                 print(f"Error pre-populating post {post.get('id')}: {e}")
         print(f"In-memory database pre-populated with {len(self.posts_db)} posts.")
 
+    def sync_to_graph_db(self):
+        """Syncs current in-memory database posts and detected coordination clusters to Neo4j graph database."""
+        try:
+            from analytics.graph_db import graph_manager
+            from analytics.coordination import detect_coordinated_behavior
+            if graph_manager.available:
+                clusters = detect_coordinated_behavior(self.posts_db)
+                graph_manager.sync_posts_and_coordination(self.posts_db, clusters)
+                print("Neo4j Graph Database successfully synchronized.")
+            else:
+                print(f"Neo4j synchronization bypassed: {graph_manager.error_message}")
+        except Exception as e:
+            print(f"Failed to sync to Neo4j: {e}")
+
 state = AppState()
+
+@app.on_event("startup")
+async def startup_event():
+    print("FastAPI server startup complete. Triggering background Neo4j sync...")
+    try:
+        asyncio.create_task(asyncio.to_thread(state.sync_to_graph_db))
+    except Exception as e:
+        print(f"Error starting background Neo4j sync task: {e}")
 
 # Pydantic request models
 class ClassifyRequest(BaseModel):
@@ -88,6 +110,13 @@ async def crawler_worker(keywords: List[str] = None):
                 
             # Add to in-memory store for historical analytics
             state.posts_db.append(post)
+            
+            # Sync to Neo4j database asynchronously in a worker thread
+            try:
+                if state.active:
+                    asyncio.create_task(asyncio.to_thread(state.sync_to_graph_db))
+            except Exception as sync_err:
+                print(f"Error launching background Neo4j sync task: {sync_err}")
             
             await state.queue.put(post)
     except asyncio.CancelledError:
@@ -150,6 +179,23 @@ def get_incidents():
         return get_all_incidents(state.posts_db)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to compile incidents: {str(e)}")
+
+@app.get("/api/network-graph")
+def get_network_graph():
+    """
+    Get accounts and coordination relationships formatted for force-directed graph.
+    """
+    try:
+        from analytics.graph_db import graph_manager
+        res = graph_manager.get_network_graph()
+        return {
+            "neo4j_available": graph_manager.available,
+            "status": res["status"],
+            "nodes": res["nodes"],
+            "edges": res["edges"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch network graph: {str(e)}")
 
 async def stop_crawler_helper():
     if state.active and state.task:

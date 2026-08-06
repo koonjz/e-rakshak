@@ -84,16 +84,20 @@ class MultilingualThreatClassifier:
             },
             "hinglish": {
                 "incitement": [
-                    r"\bmaaro\b", r"\bpeeto\b", r"\baag laga\b", r"\btodphod\b", r"\bpatthar\b",
-                    r"\bsabak sikh\b", r"\bmaar daalo\b", r"\bdestroy kar\b", r"\bkill kar\b",
-                    r"\bbadla lenge\b", r"\bjaan se maar\b", r"\bgadiyon ko aag\b", r"\bblock the\b",
-                    r"\bmaar dena\b", r"\bmaar do\b",
+                    r"\bm+a{1,3}r+o*\b", r"\bm+a{1,3}r+\s*d+a{1,2}l+o*\b", r"\bp+e{1,2}t+o*\b",
+                    r"\ba+g+\s*l+a+g+a*\b", r"\bt+o+d+\s*f+o+d+\b", r"\bt+o+d+\s*p+h+o+d+\b",
+                    r"\bp+a+t+t?h+a+r+\b", r"\bp+a+t+t?h+a+r+b+a{1,2}z+i*\b", r"\bsabak sikh\b",
+                    r"\bdestroy kar\b", r"\bkill kar\b", r"\bbadla lenge\b", r"\bgadiyon ko aag\b",
+                    r"\bblock the\b", r"\br+a+s+t+a+\s*r+o+k+o*\b", r"\bh+i+g+h+w+a+y+\s*j+a+m+\b",
+                    r"\br+o+a+d+\s*j+a+m+\b", r"\bd+a+n+g+a*\b", r"\bg+h+e+r+a+o*\b",
                     r"i will (destroy|kill|hurt|murder|find|stalk) you"
                 ],
                 "inflammatory": [
                     r"\bchor\b", r"\bbakwas\b", r"\bkamchor\b", r"\bmurkh\b", r"\bghatiya\b",
-                    r"\bbadtameez\b", r"\bchutiya\b", r"\bkamina\b", r"\bidiot\b", r"\bcorrupt\b",
-                    r"\bbarbaad kar\b", r"\bbarbaad kiya\b"
+                    r"\bcorrupt\b", r"\bbarbaad kar\b", r"\bbarbaad kiya\b",
+                    r"\bc+h+u+t+i+y+a*\b", r"\bk+a+m+i+n+a*\b", r"\bh+a+r+a+m+i*\b",
+                    r"\bg+a+n+d+u+\b", r"\bg+a+d+d+a+r+\b", r"\bd+e+s+h+d+r+o+h+i*\b",
+                    r"\bk+u+t+t+a*\b", r"\bs+a+a+l+a*\b", r"\ba+n+d+o+l+a+n+\b", r"\bidiot\b"
                 ],
                 "fake_news": [
                     r"\bleak\b", r"\bbreaking\b", r"\bshut down\b", r"\bban hone\b", r"\bplastic ke\b",
@@ -102,13 +106,16 @@ class MultilingualThreatClassifier:
             },
             "gujlish": {
                 "incitement": [
-                    r"\btodphod\b", r"\bpaththarmaro\b", r"\bsળgavi\b", r"\bdanga\b", r"\bdhoka\b",
-                    r"\bhulo\b", r"\bthoki\b", r"\bpeeto\b", r"\bmari nakho\b", r"\bpuro kari\b",
-                    r"\bpatavi do\b", r"\bvehicles roko\b", r"\bdhoka maro\b", r"\bkadhi nakho\b",
-                    r"\bdesh mathi\b"
+                    r"\bm+a{1,2}r+i+\s*n+a+k+h+o*\b", r"\bp+u+r+o+\s*k+a+r+i*\b", r"\bp+a+t+a+v+i+\s*d+o*\b",
+                    r"\bs+a+l+g+a+v+i*\b", r"\bs+a+l+g+a+w+i*\b", r"\bs+ળ+g+a+v+i*\b",
+                    r"\bt+o+d+p+h+o+d+\b", r"\bt+o+d+f+o+d+\b", r"\bp+a+t+t?h+a+r+m+a+r+o*\b",
+                    r"\br+o+a+d+\s*b+l+o+c+k+\b", r"\bh+i+g+h+w+a+y+\s*b+l+o+c+k+\b",
+                    r"\bv+e+h+i+c+l+e+s*\s*r+o+k+o*\b", r"\bdanga\b", r"\bdhoka\b", r"\bhulo\b",
+                    r"\bthoki\b", r"\bpeeto\b"
                 ],
                 "inflammatory": [
-                    r"\bnkaamo\b", r"\bnakamo\b", r"\bbhrast\b", r"\bbhrasht\b", r"\bbadtameez\b",
+                    r"\bn+a+k+a+m+o*\b", r"\bn+k+a+a+m+o*\b", r"\bb+h+r+a+s+h+t+a*\b", r"\bb+h+r+a+s+t+a*\b",
+                    r"\bb+a+d+t+a+m+e+e+z+\b", r"\bb+a+d+t+a+m+e+z+\b", r"\bg+a+n+d+a*\b", r"\bm+u+r+k+h+\b",
                     r"\buse-less\b", r"\bkamchor\b", r"\bloako ne murkh\b", r"\bcorrupt\b", r"\bhaters\b"
                 ],
                 "fake_news": [
