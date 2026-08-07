@@ -15,9 +15,9 @@ The **Social Threat Analyzer** is a real-time, multilingual social media monitor
 | :--- | :--- | :--- | :--- |
 | **📽️ YouTube** | REST API v3 Harvesting | **ACTIVE & OPERATIONAL** | Ingests live comment feeds based on query keywords. Requires a valid Google Cloud Developer `YOUTUBE_API_KEY` in `.env`. |
 | **✈️ Telegram** | MTProto Client (Telethon) | **ACTIVE & OPERATIONAL** | Connects to decentralized networks to stream public channels. Requires `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` in `.env` and a one-time terminal authentication via `login_telegram.py`. |
-| **📸 Instagram** | Meta Graph API | **VERIFIED (Expired Credentials)** | Live calls enabled. Querying `ig_hashtag_search` with env token returns Meta's actual OAuthException (Error code: `190`, subcode: `463` - Session Expired). |
-| **👥 Facebook** | Meta Graph API | **VERIFIED (Expired Credentials)** | Live calls enabled. Querying `/feed` with env token returns Meta's actual OAuthException (Error code: `190`, subcode: `463` - Session Expired). |
-| **🐦 X (Twitter)** | V2 Streaming Client | **BLOCKED (Paid APIs)** | Protocol stubs (`TwitterCrawler`) are mapped and ready, but endpoints are commercialized. Read/search streaming requires a paid developer tier. |
+| **📸 Instagram** | Meta Graph API | **VERIFIED (Missing User ID)** | Token accepted. Querying `ig_hashtag_search` returns Meta's actual OAuthException (Error code: `100` - user_id param invalid). |
+| **👥 Facebook** | Meta Graph API | **VERIFIED (Missing Permissions)** | Token accepted. Querying `/feed` returns Meta's actual OAuthException (Error code: `100` - Object does not exist due to missing permission or reviewable feature). |
+| **🐦 X (Twitter)** | API v2 Search Recent | **VERIFIED (Credits Depleted / Unfunded)** | Fully implemented and API-verified (confirmed via a real `402 Payment Required` response proving auth and endpoint integration work correctly), but not currently funded. X's pay-per-use pricing (no free tier as of Feb 2026) requires purchasing credits, which was a deliberate decision not to spend on for this build. A $500 automatic new-project credit promo was investigated but did not apply to this account's Developer Console. The crawler will activate automatically the moment real credits are purchased, with no code changes required. |
 
 ---
 

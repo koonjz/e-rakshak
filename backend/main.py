@@ -8,7 +8,13 @@ import sys
 from typing import Dict, Any, List
 
 # Ensure parent directory is in sys.path so we can import the ml module
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import os
+from dotenv import load_dotenv
+current_dir = os.path.dirname(os.path.abspath(__file__))
+dotenv_path = os.path.abspath(os.path.join(current_dir, "..", ".env"))
+load_dotenv(dotenv_path=dotenv_path)
+
+sys.path.append(os.path.abspath(os.path.join(current_dir, "..")))
 
 from crawler.mock import MockCrawler
 from crawler.social_stubs import YouTubeCrawler, InstagramCrawler, FacebookCrawler, TelegramCrawler
@@ -334,7 +340,7 @@ def get_crawler_status():
         "dataset_exists": dataset_exists,
         "youtube_key_loaded": bool(os.getenv("YOUTUBE_API_KEY")),
         "meta_token_loaded": bool(os.getenv("META_ACCESS_TOKEN")),
-        "twitter_token_loaded": bool(os.getenv("TWITTER_BEARER_TOKEN")),
+        "twitter_auth_loaded": bool(os.getenv("TWITTER_BEARER_TOKEN")),
         "telegram_auth_loaded": bool(os.getenv("TELEGRAM_API_ID") and os.getenv("TELEGRAM_API_HASH") and session_exists),
         "last_error": getattr(state, "last_crawler_error", None)
     }

@@ -540,12 +540,13 @@ function App() {
 
   // Crawler and Database states
   const [crawlerActive, setCrawlerActive] = useState(false)
-  const [crawlerModeSelection, setCrawlerModeSelection] = useState<'mock' | 'youtube' | 'instagram' | 'facebook' | 'telegram'>('mock')
+  const [crawlerModeSelection, setCrawlerModeSelection] = useState<'mock' | 'youtube' | 'instagram' | 'facebook' | 'telegram' | 'twitter'>('mock')
   const [crawlerKeywords, setCrawlerKeywords] = useState('')
-  const [backendCrawlerMode, setBackendCrawlerMode] = useState<'mock' | 'youtube' | 'instagram' | 'facebook' | 'telegram'>('mock')
+  const [backendCrawlerMode, setBackendCrawlerMode] = useState<'mock' | 'youtube' | 'instagram' | 'facebook' | 'telegram' | 'twitter'>('mock')
   const [youtubeKeyLoaded, setYoutubeKeyLoaded] = useState(false)
   const [metaTokenLoaded, setMetaTokenLoaded] = useState(false)
   const [telegramAuthLoaded, setTelegramAuthLoaded] = useState(false)
+  const [twitterAuthLoaded, setTwitterAuthLoaded] = useState(false)
   const [queueSize, setQueueSize] = useState(0)
   const [postsFeed, setPostsFeed] = useState<Post[]>([])
   const [coordinationClusters, setCoordinationClusters] = useState<Cluster[]>([])
@@ -629,6 +630,7 @@ function App() {
         setYoutubeKeyLoaded(!!data.youtube_key_loaded)
         setMetaTokenLoaded(!!data.meta_token_loaded)
         setTelegramAuthLoaded(!!data.telegram_auth_loaded)
+        setTwitterAuthLoaded(!!data.twitter_auth_loaded)
       }
     } catch (err) {
       console.error('Failed to get crawler status', err)
@@ -958,6 +960,32 @@ function App() {
     return true
   })
 
+  const sortedFilteredFeed = [...filteredFeed].sort((a, b) => {
+    const fA = a.user_profile?.follower_count;
+    const fB = b.user_profile?.follower_count;
+    
+    const hasA = typeof fA === 'number' && fA !== null && fA !== undefined;
+    const hasB = typeof fB === 'number' && fB !== null && fB !== undefined;
+    
+    if (hasA && hasB) {
+      if (fB !== fA) {
+        return fB - fA;
+      }
+    } else if (hasA && !hasB) {
+      return -1;
+    } else if (!hasA && hasB) {
+      return 1;
+    }
+    
+    const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+    const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+    if (timeB !== timeA) {
+      return timeB - timeA;
+    }
+    
+    return a.id.localeCompare(b.id);
+  });
+
   // Filter incidents list
   const filteredIncidents = incidents.filter(inc => {
     // Severity Filter
@@ -980,6 +1008,41 @@ function App() {
     }
     return true
   })
+
+  const getIncidentFollowerCount = (inc: any): number | undefined => {
+    if (!inc.related_posts || inc.related_posts.length === 0) return undefined;
+    const counts = inc.related_posts
+      .map((p: any) => p.user_profile?.follower_count)
+      .filter((c: any) => typeof c === 'number' && c !== null && c !== undefined);
+    if (counts.length === 0) return undefined;
+    return Math.max(...counts);
+  };
+
+  const sortedFilteredIncidents = [...filteredIncidents].sort((a, b) => {
+    const fA = getIncidentFollowerCount(a);
+    const fB = getIncidentFollowerCount(b);
+    
+    const hasA = typeof fA === 'number';
+    const hasB = typeof fB === 'number';
+    
+    if (hasA && hasB) {
+      if (fB !== fA) {
+        return fB - fA;
+      }
+    } else if (hasA && !hasB) {
+      return -1;
+    } else if (!hasA && hasB) {
+      return 1;
+    }
+    
+    const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+    const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+    if (timeB !== timeA) {
+      return timeB - timeA;
+    }
+    
+    return a.incident_id.localeCompare(b.incident_id);
+  });
 
   // Cities extracted from constants for filter dropdown
   const citiesList = ["Ahmedabad", "Surat", "Vadodara", "Rajkot", "Gandhinagar", "Bhavnagar", "Jamnagar", "Junagadh", "Anand", "Nadiad"]
@@ -1249,7 +1312,7 @@ function App() {
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 border-b border-zinc-900 pb-4">
               <div>
                 <h3 className="text-xs font-extrabold uppercase tracking-widest text-zinc-400 font-mono">
-                  🚨 Persistent Critical Threat Incidents ({filteredIncidents.length} matched)
+                  🚨 Persistent Critical Threat Incidents ({sortedFilteredIncidents.length} matched)
                 </h3>
                 <p className="text-[10px] text-zinc-500 font-mono">Generated from Incitement and Coordination threshold triggers</p>
               </div>
@@ -1300,12 +1363,12 @@ function App() {
 
             {/* List of incidents */}
             <div className="space-y-4 overflow-y-auto max-h-[580px] pr-2">
-              {filteredIncidents.length === 0 ? (
+              {sortedFilteredIncidents.length === 0 ? (
                 <div className="h-48 flex items-center justify-center text-zinc-600 text-xs italic">
                   No incident records matched current filters.
                 </div>
               ) : (
-                filteredIncidents.map((inc) => {
+                sortedFilteredIncidents.map((inc) => {
                   const isCritical = inc.severity === 'CRITICAL'
                   const isExpanded = expandedIncident === inc.incident_id
                   return (
@@ -1336,6 +1399,9 @@ function App() {
                         </div>
 
                         <div className="flex items-center gap-4 text-[10px] font-mono text-zinc-500">
+                          {getIncidentFollowerCount(inc) !== undefined && (
+                            <div>👥 REACH: <strong className="text-zinc-400">{getIncidentFollowerCount(inc)?.toLocaleString()}</strong></div>
+                          )}
                           <div>📍 {inc.affected_geo}</div>
                           <div>📅 {new Date(inc.timestamp).toLocaleString()}</div>
                           <div className="text-zinc-600 text-xs font-bold w-4 text-center">
@@ -1432,7 +1498,7 @@ function App() {
                   <span className="animate-pulse text-indigo-500">🛰️</span> Ingestion Stream Control Panel
                 </h3>
                 <p className="text-[10px] text-zinc-500 font-mono">
-                  Current Mode: <span className="text-indigo-400 font-bold uppercase">{backendCrawlerMode === 'youtube' ? 'Live YouTube Crawler' : backendCrawlerMode === 'instagram' ? 'Live Instagram Crawler' : backendCrawlerMode === 'facebook' ? 'Live Facebook Crawler' : backendCrawlerMode === 'telegram' ? 'Live Telegram Crawler' : 'Mock Ingestion Feed'}</span>
+                  Current Mode: <span className="text-indigo-400 font-bold uppercase">{backendCrawlerMode === 'youtube' ? 'Live YouTube Crawler' : backendCrawlerMode === 'instagram' ? 'Live Instagram Crawler' : backendCrawlerMode === 'facebook' ? 'Live Facebook Crawler' : backendCrawlerMode === 'telegram' ? 'Live Telegram Crawler' : backendCrawlerMode === 'twitter' ? 'Live X Crawler' : 'Mock Ingestion Feed'}</span>
                   {crawlerActive ? (
                     <span className="ml-2 px-1.5 py-0.5 rounded text-[8px] bg-rose-500/10 text-rose-400 border border-rose-500/20 font-bold animate-pulse">ACTIVE STREAMING</span>
                   ) : (
@@ -1449,7 +1515,7 @@ function App() {
                 <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5 font-mono">Select Source Mode</label>
                 <select
                   value={crawlerModeSelection}
-                  onChange={(e) => setCrawlerModeSelection(e.target.value as 'mock' | 'youtube' | 'instagram' | 'facebook' | 'telegram')}
+                  onChange={(e) => setCrawlerModeSelection(e.target.value as 'mock' | 'youtube' | 'instagram' | 'facebook' | 'telegram' | 'twitter')}
                   disabled={crawlerActive}
                   className="w-full text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded p-2 text-zinc-300 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -1458,6 +1524,7 @@ function App() {
                   <option value="instagram">LIVE INSTAGRAM MODE (REAL-TIME)</option>
                   <option value="facebook">LIVE FACEBOOK MODE (REAL-TIME)</option>
                   <option value="telegram">LIVE TELEGRAM MODE (REAL-TIME)</option>
+                  <option value="twitter">LIVE X MODE (REAL-TIME)</option>
                 </select>
               </div>
 
@@ -1484,6 +1551,13 @@ function App() {
                     className="w-full py-2 rounded text-[11px] font-extrabold font-mono bg-zinc-950 border border-amber-500/20 text-amber-500/60 tracking-widest cursor-not-allowed uppercase"
                   >
                     AWAITING ACCESS
+                  </button>
+                ) : (crawlerModeSelection === 'twitter' && !twitterAuthLoaded) ? (
+                  <button
+                    disabled={true}
+                    className="w-full py-2 rounded text-[11px] font-extrabold font-mono bg-zinc-950 border border-amber-500/20 text-amber-500/60 tracking-widest cursor-not-allowed uppercase"
+                  >
+                    PAID API REQ
                   </button>
                 ) : (crawlerModeSelection === 'telegram' && !telegramAuthLoaded) ? (
                   <button
@@ -1516,6 +1590,19 @@ function App() {
                   <div className="font-bold uppercase tracking-wider text-[10px]">Awaiting Platform API Approval</div>
                   <div className="text-zinc-400 text-[9px] mt-0.5">
                     Instagram/Facebook crawler feeds are in review/scaffold mode. Active scraping is disabled pending Meta App Review for public content access permissions (<code className="bg-zinc-950 px-1 py-0.5 rounded text-amber-300">pages_public_content_access</code>).
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Pending Twitter / X token warning banner */}
+            {crawlerModeSelection === 'twitter' && !twitterAuthLoaded && (
+              <div className="p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-lg text-[11px] font-mono flex items-start gap-2.5">
+                <span className="text-sm">⚠️</span>
+                <div>
+                  <div className="font-bold uppercase tracking-wider text-[10px]">Paid API Tier Required</div>
+                  <div className="text-zinc-400 text-[9px] mt-0.5">
+                    X (Twitter) crawler requires purchased API credits. Active scraping is disabled because <code className="bg-zinc-950 px-1 py-0.5 rounded text-amber-300">TWITTER_BEARER_TOKEN</code> is not configured in `.env` (no free tier available as of Feb 2026).
                   </div>
                 </div>
               </div>
@@ -1638,7 +1725,7 @@ function App() {
                   {!crawlerActive && <span className="text-[10px] text-indigo-400 not-italic">Click "Ingest Live Stream" above to stream posts.</span>}
                 </div>
               ) : (
-                filteredFeed.map((post) => (
+                sortedFilteredFeed.map((post) => (
                   <div 
                     key={post.id} 
                     className={`p-3 rounded-lg border transition-all duration-200 flex flex-col gap-2 ${getPostCardStyle(post.threat_category)}`}
