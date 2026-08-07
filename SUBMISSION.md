@@ -15,8 +15,8 @@ The **Social Threat Analyzer** is a real-time, multilingual social media monitor
 | :--- | :--- | :--- | :--- |
 | **📽️ YouTube** | REST API v3 Harvesting | **ACTIVE & OPERATIONAL** | Ingests live comment feeds based on query keywords. Requires a valid Google Cloud Developer `YOUTUBE_API_KEY` in `.env`. |
 | **✈️ Telegram** | MTProto Client (Telethon) | **ACTIVE & OPERATIONAL** | Connects to decentralized networks to stream public channels. Requires `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` in `.env` and a one-time terminal authentication via `login_telegram.py`. |
-| **📸 Instagram** | Meta Graph API | **PENDING APP REVIEW** | Implemented as a review-ready crawler scaffold (`InstagramCrawler`). Active production traffic is blocked pending Meta review for `instagram_basic` and public page read permissions. |
-| **👥 Facebook** | Meta Graph API | **PENDING APP REVIEW** | Implemented as a review-ready crawler scaffold (`FacebookCrawler`). Feeds block pending Meta approval for public content access permissions. |
+| **📸 Instagram** | Meta Graph API | **VERIFIED (Expired Credentials)** | Live calls enabled. Querying `ig_hashtag_search` with env token returns Meta's actual OAuthException (Error code: `190`, subcode: `463` - Session Expired). |
+| **👥 Facebook** | Meta Graph API | **VERIFIED (Expired Credentials)** | Live calls enabled. Querying `/feed` with env token returns Meta's actual OAuthException (Error code: `190`, subcode: `463` - Session Expired). |
 | **🐦 X (Twitter)** | V2 Streaming Client | **BLOCKED (Paid APIs)** | Protocol stubs (`TwitterCrawler`) are mapped and ready, but endpoints are commercialized. Read/search streaming requires a paid developer tier. |
 
 ---

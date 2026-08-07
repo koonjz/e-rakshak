@@ -91,7 +91,14 @@ async def crawler_worker(keywords: List[str] = None):
     """
     try:
         print(f"Crawler worker task started with keywords: {keywords}")
+        state.last_crawler_error = None
         async for post in state.crawler.stream_posts(keywords=keywords):
+            if isinstance(post, dict) and post.get("status") == "error":
+                print(f"Crawler worker received error payload: {post}")
+                state.last_crawler_error = post
+                state.active = False
+                break
+                
             # If the queue gets completely full, discard the oldest to avoid memory leaks
             if state.queue.full():
                 try:
@@ -236,8 +243,17 @@ async def start_live_crawler(platform: str = "youtube", keywords: str = "Gujarat
     if platform.lower() in ("instagram", "facebook"):
         if not meta_access_token:
             return {
-                "status": "pending_meta_review",
-                "message": f"Awaiting Meta App Review approval for public content access (Permission: {platform.lower()}_basic)"
+                "status": "error",
+                "message": "No credentials configured: META_ACCESS_TOKEN is missing."
+            }
+            
+    # Enforce access checks for Twitter
+    twitter_bearer_token = os.getenv("TWITTER_BEARER_TOKEN")
+    if platform.lower() in ("twitter", "x"):
+        if not twitter_bearer_token:
+            return {
+                "status": "error",
+                "message": "No credentials configured: TWITTER_BEARER_TOKEN is missing. Ingestion is blocked by X paid-API requirement."
             }
             
     # Enforce access checks for Telegram
@@ -263,6 +279,9 @@ async def start_live_crawler(platform: str = "youtube", keywords: str = "Gujarat
     elif platform.lower() == "facebook":
         state.crawler = FacebookCrawler()
         state.mode = "facebook"
+    elif platform.lower() in ("twitter", "x"):
+        state.crawler = TwitterCrawler()
+        state.mode = "twitter"
     elif platform.lower() == "telegram":
         state.crawler = TelegramCrawler()
         state.mode = "telegram"
@@ -315,7 +334,9 @@ def get_crawler_status():
         "dataset_exists": dataset_exists,
         "youtube_key_loaded": bool(os.getenv("YOUTUBE_API_KEY")),
         "meta_token_loaded": bool(os.getenv("META_ACCESS_TOKEN")),
-        "telegram_auth_loaded": bool(os.getenv("TELEGRAM_API_ID") and os.getenv("TELEGRAM_API_HASH") and session_exists)
+        "twitter_token_loaded": bool(os.getenv("TWITTER_BEARER_TOKEN")),
+        "telegram_auth_loaded": bool(os.getenv("TELEGRAM_API_ID") and os.getenv("TELEGRAM_API_HASH") and session_exists),
+        "last_error": getattr(state, "last_crawler_error", None)
     }
 
 @app.get("/api/crawler/posts", response_model=List[Dict[str, Any]])
