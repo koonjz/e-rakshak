@@ -193,6 +193,123 @@ def get_incidents():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to compile incidents: {str(e)}")
 
+@app.get("/api/incidents/export")
+def export_incidents_excel(n: int = 10):
+    """
+    Export the top N threat incidents sorted by reach/follower count descending to an Excel file.
+    """
+    try:
+        from analytics.incidents import get_all_incidents
+        from io import BytesIO
+        from fastapi.responses import StreamingResponse
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+        from openpyxl.utils import get_column_letter
+        
+        # Get all incidents
+        incidents = get_all_incidents(state.posts_db)
+        
+        # Helper to get reach (max follower count)
+        def get_incident_follower_count(inc: dict) -> float:
+            related_posts = inc.get("related_posts", [])
+            if not related_posts:
+                return float('-inf')
+            counts = []
+            for p in related_posts:
+                val = p.get("user_profile", {}).get("follower_count")
+                if val is not None and isinstance(val, (int, float)):
+                    counts.append(val)
+            if not counts:
+                return float('-inf')
+            return max(counts)
+            
+        # Stable sort matching frontend:
+        # 1. Sort by incident_id ascending
+        incidents.sort(key=lambda x: x.get("incident_id", ""))
+        # 2. Sort by timestamp descending
+        incidents.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        # 3. Sort by reach (max follower_count) descending
+        incidents.sort(key=get_incident_follower_count, reverse=True)
+        
+        # Slice top N
+        top_n = incidents[:n]
+        
+        # Build Excel sheet
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Threat Incidents"
+        
+        # Headers
+        headers = [
+            "Incident ID", "Timestamp", "Threat Category", "Severity", 
+            "Platform", "Account/Username", "Follower Count", 
+            "Geo/City", "Post Text Snippet", "Suspicion Score", "Escalation Template"
+        ]
+        ws.append(headers)
+        
+        # Styling header: bold
+        bold_font = Font(bold=True)
+        for col_idx in range(1, len(headers) + 1):
+            ws.cell(row=1, column=col_idx).font = bold_font
+            
+        # Freeze headers row
+        ws.freeze_panes = "A2"
+        
+        # Append data rows
+        for inc in top_n:
+            inc_id = inc.get("incident_id", "")
+            timestamp = inc.get("timestamp", "")
+            category = inc.get("threat_category", "")
+            severity = inc.get("severity", "")
+            
+            related_posts = inc.get("related_posts", [])
+            platforms = ", ".join(sorted(list(set(p.get("platform", "X") for p in related_posts))))
+            usernames = ", ".join(p.get("username", "unknown") for p in related_posts)
+            
+            reach = get_incident_follower_count(inc)
+            reach_str = str(reach) if reach != float('-inf') else "N/A"
+            
+            geo = inc.get("affected_geo", "")
+            
+            # Post Text Snippet: text of the first post
+            text_snippet = related_posts[0].get("text", "") if related_posts else ""
+            
+            suspicion = inc.get("suspicion_score", "")
+            suspicion_str = f"{suspicion}%" if suspicion != "" else "N/A"
+            
+            template = inc.get("suggested_escalation_template", "")
+            
+            ws.append([
+                inc_id, timestamp, category, severity,
+                platforms, usernames, reach_str,
+                geo, text_snippet, suspicion_str, template
+            ])
+            
+        # Auto-fit column widths (cap at 50)
+        for col in ws.columns:
+            max_len = 0
+            for cell in col:
+                val_str = str(cell.value or "")
+                lines = val_str.split("\n")
+                for line in lines:
+                    if len(line) > max_len:
+                        max_len = len(line)
+            col_letter = get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = min(max(max_len + 3, 10), 50)
+            
+        # Write to byte stream
+        stream = BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        
+        return StreamingResponse(
+            stream,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=top_{n}_incidents_export.xlsx"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to export incidents: {str(e)}")
+
 @app.get("/api/network-graph")
 def get_network_graph():
     """

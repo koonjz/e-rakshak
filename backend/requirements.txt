@@ -8,4 +8,5 @@ telethon
 python-dotenv
 python-multipart
 neo4j
+openpyxl
 

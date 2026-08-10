@@ -100,6 +100,7 @@ def get_all_incidents(posts_db: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     "affected_geo": city_str,
                     "timestamp": cluster_time,
                     "related_posts": matched_posts,
+                    "suspicion_score": suspicion,
                     "suggested_escalation_template": template
                 })
     except Exception as e:

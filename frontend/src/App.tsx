@@ -562,6 +562,7 @@ function App() {
   const [filterIncidentSeverity, setFilterIncidentSeverity] = useState<string>('All')
   const [filterIncidentCategory, setFilterIncidentCategory] = useState<string>('All')
   const [filterIncidentKeyword, setFilterIncidentKeyword] = useState<string>('')
+  const [exportLimitInput, setExportLimitInput] = useState<string>('10')
 
   // Interactive Sandbox state
   const [textInput, setTextInput] = useState("Alert: We will block the roads near Surat bypass tomorrow morning. Join the protest!")
@@ -1319,7 +1320,7 @@ function App() {
             </div>
 
             {/* Incident filter controls */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 rounded-lg bg-zinc-950/60 border border-zinc-900/50">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 p-3 rounded-lg bg-zinc-950/60 border border-zinc-900/50">
               {/* Severity dropdown */}
               <div>
                 <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5 font-mono">Severity Level</label>
@@ -1358,6 +1359,30 @@ function App() {
                   onChange={(e) => setFilterIncidentKeyword(e.target.value)}
                   className="w-full text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded p-1 text-zinc-300 placeholder:text-zinc-700"
                 />
+              </div>
+
+              {/* Excel Export controls */}
+              <div>
+                <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5 font-mono">Export Top N</label>
+                <div className="flex gap-2">
+                  <input 
+                    type="number"
+                    min="1"
+                    value={exportLimitInput}
+                    onChange={(e) => setExportLimitInput(e.target.value)}
+                    className="w-16 text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded p-1 text-zinc-300 text-center"
+                  />
+                  <button
+                    disabled={!/^[1-9]\d*$/.test(exportLimitInput)}
+                    onClick={() => {
+                      const limit = parseInt(exportLimitInput, 10);
+                      window.open(`http://127.0.0.1:8000/api/incidents/export?n=${limit}`, '_blank');
+                    }}
+                    className="flex-1 px-3 py-1 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 text-[10px] font-bold font-mono rounded cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed uppercase"
+                  >
+                    Download Excel
+                  </button>
+                </div>
               </div>
             </div>
 
