@@ -135,3 +135,18 @@ Unlike web scrapers or bot APIs, MTProto requires a registered application confi
    *Note: Telethon will prompt you to enter your phone number and the verification code sent to your Telegram app. This generates the secure `telegram_session.session` file, which is saved locally and ignored by Git.*
 3. Start the crawler via the analyst dashboard in **LIVE TELEGRAM MODE**.
 
+---
+
+## 📅 Ingestion Lookback Window & Platform API Limits
+
+The Real-Time Social Ingestion Feed supports a configurable **Lookback Window** (1 to 30 days, default 7 days) to limit historical backfill when starting a stream. Because different platform APIs impose distinct lookback limits, the analyzer handles and surfaces constraints accordingly:
+
+| Platform | Default Lookback | Max Allowed | API Limitation & Behavior |
+| :--- | :---: | :---: | :--- |
+| **Mock Ingestion** | 7 Days | 30 Days | Filters the pre-generated dataset relative to the current local date/time. |
+| **YouTube** | 7 Days | 30 Days | Limits video discovery using the `publishedAfter` query parameter (RFC 3339 format). |
+| **Telegram** | 7 Days | 30 Days | Sets the Telethon `offset_date` parameter inside `iter_messages` to start fetching from the lookback cutoff. |
+| **X (Twitter)** | 7 Days | 7 Days | **Hard Limit**: X API v2 `recent_search` only permits a 7-day lookback. Requesting $> 7$ days returns a warning banner in the analyst dashboard. |
+| **Instagram / FB** | 7 Days | 7 Days | **Meta Limit**: Standard Graph API hashtag search and page feed endpoints typically limit queries to recent posts. Requesting $> 7$ days displays a warning. |
+
+
