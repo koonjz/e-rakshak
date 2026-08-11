@@ -542,6 +542,8 @@ function App() {
   const [crawlerActive, setCrawlerActive] = useState(false)
   const [crawlerModeSelection, setCrawlerModeSelection] = useState<'mock' | 'youtube' | 'instagram' | 'facebook' | 'telegram' | 'twitter'>('mock')
   const [crawlerKeywords, setCrawlerKeywords] = useState('')
+  const [lookbackDays, setLookbackDays] = useState<number>(7)
+  const [crawlerWarning, setCrawlerWarning] = useState<string | null>(null)
   const [backendCrawlerMode, setBackendCrawlerMode] = useState<'mock' | 'youtube' | 'instagram' | 'facebook' | 'telegram' | 'twitter'>('mock')
   const [youtubeKeyLoaded, setYoutubeKeyLoaded] = useState(false)
   const [metaTokenLoaded, setMetaTokenLoaded] = useState(false)
@@ -702,41 +704,9 @@ function App() {
     }
   }
 
-  // Export incident report as dynamic Markdown file download
+  // Export incident report as dynamic PDF file download
   const handleExportReport = (incident: any) => {
-    const postsText = incident.related_posts.map((p: any, idx: number) => (
-      `### Related Post #${idx + 1} (${p.platform})\n` +
-      `- **User**: ${p.username}\n` +
-      `- **Timestamp**: ${p.timestamp}\n` +
-      `- **Text**: ${p.text}\n` +
-      (p.geo ? `- **Location**: ${p.geo.city} (${p.geo.latitude}, ${p.geo.longitude})\n` : '')
-    )).join('\n');
-
-    const mdContent = (
-      `# THREAT INCIDENT REPORT - ${incident.incident_id}\n` +
-      `**Severity**: ${incident.severity}\n` +
-      `**Category**: ${incident.threat_category}\n` +
-      `**Affected Geo**: ${incident.affected_geo}\n` +
-      `**Timestamp**: ${incident.timestamp}\n\n` +
-      `## Incident Summary\n` +
-      `${incident.summary}\n\n` +
-      `## Matched Ingested Posts\n` +
-      `${postsText}\n\n` +
-      `## Duty Officer Escalation Template\n` +
-      `\`\`\`\n` +
-      `${incident.suggested_escalation_template}\n` +
-      `\`\`\`\n\n` +
-      `*Report generated programmatically via Social Threat Analyzer Console on ${new Date().toLocaleString()}*`
-    );
-
-    const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `INCIDENT_REPORT_${incident.incident_id}.md`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    window.open(`http://127.0.0.1:8000/api/incidents/${incident.incident_id}/pdf`, '_blank');
   }
 
   // Start/Stop Crawler
@@ -745,6 +715,7 @@ function App() {
       try {
         const res = await fetch(`http://127.0.0.1:8000/api/crawler/stop`, { method: 'POST' })
         if (res.ok) {
+          setCrawlerWarning(null)
           checkCrawlerStatus()
         }
       } catch (err) {
@@ -752,10 +723,10 @@ function App() {
       }
     } else {
       let endpoint = 'start'
-      let query = ''
+      let query = `?lookback_days=${lookbackDays}`
       if (crawlerModeSelection !== 'mock') {
         endpoint = 'start-live'
-        query = `?platform=${crawlerModeSelection}&keywords=${encodeURIComponent(crawlerKeywords)}`
+        query = `?platform=${crawlerModeSelection}&keywords=${encodeURIComponent(crawlerKeywords)}&lookback_days=${lookbackDays}`
       }
       try {
         const res = await fetch(`http://127.0.0.1:8000/api/crawler/${endpoint}${query}`, { method: 'POST' })
@@ -763,6 +734,11 @@ function App() {
           const data = await res.json()
           if (data.status === 'pending_meta_review' || data.status === 'pending_auth') {
             alert(data.message)
+          }
+          if (data.warning) {
+            setCrawlerWarning(data.warning)
+          } else {
+            setCrawlerWarning(null)
           }
           checkCrawlerStatus()
         }
@@ -1493,7 +1469,7 @@ function App() {
                               }}
                               className="px-4 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 text-xs font-bold font-mono rounded cursor-pointer transition-all flex items-center gap-1.5"
                             >
-                              📥 Export as Report (.md)
+                              📥 Export as Report (.pdf)
                             </button>
                           </div>
                         </div>
@@ -1554,7 +1530,7 @@ function App() {
               </div>
 
               {/* YouTube Keyword Search Input */}
-              <div className="md:col-span-5">
+              <div className="md:col-span-3">
                 <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5 font-mono">
                   Live Search Query / Keywords
                 </label>
@@ -1565,6 +1541,29 @@ function App() {
                   onChange={(e) => setCrawlerKeywords(e.target.value)}
                   disabled={crawlerActive || crawlerModeSelection === 'mock'}
                   className="w-full text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded p-2 text-zinc-300 placeholder:text-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                />
+              </div>
+
+              {/* Lookback Window Input */}
+              <div className="md:col-span-2">
+                <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5 font-mono">
+                  Lookback (Days)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={lookbackDays}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    if (!isNaN(val)) {
+                      setLookbackDays(Math.min(Math.max(val, 1), 30));
+                    } else {
+                      setLookbackDays(7);
+                    }
+                  }}
+                  disabled={crawlerActive}
+                  className="w-full text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded p-2 text-zinc-300 placeholder:text-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed text-center font-bold"
                 />
               </div>
 
@@ -1642,6 +1641,15 @@ function App() {
                   <div className="text-zinc-400 text-[9px] mt-0.5">
                     Telegram MTProto client is not configured or authenticated. Please ensure <code className="bg-zinc-950 px-1 py-0.5 rounded text-rose-300">TELEGRAM_API_ID</code> & <code className="bg-zinc-950 px-1 py-0.5 rounded text-rose-300">TELEGRAM_API_HASH</code> are added to `.env` and run the interactive CLI helper <code className="bg-zinc-950 px-1 py-0.5 rounded text-rose-300">login_telegram.py</code> to verify the session.
                   </div>
+                </div>
+              </div>
+            {/* API limit notice banner */}
+            {crawlerWarning && (
+              <div className="p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-lg text-[11px] font-mono flex items-start gap-2.5">
+                <span className="text-sm">⚠️</span>
+                <div>
+                  <div className="font-bold uppercase tracking-wider text-[10px]">API Window Limit Notice</div>
+                  <div className="text-zinc-400 text-[9px] mt-0.5">{crawlerWarning}</div>
                 </div>
               </div>
             )}

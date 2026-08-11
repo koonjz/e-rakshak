@@ -17,7 +17,7 @@ load_dotenv(dotenv_path=dotenv_path)
 sys.path.append(os.path.abspath(os.path.join(current_dir, "..")))
 
 from crawler.mock import MockCrawler
-from crawler.social_stubs import YouTubeCrawler, InstagramCrawler, FacebookCrawler, TelegramCrawler
+from crawler.social_stubs import YouTubeCrawler, InstagramCrawler, FacebookCrawler, TelegramCrawler, TwitterCrawler
 from ml.classifier import MultilingualThreatClassifier
 from ml.image_analyzer import analyze_image
 
@@ -310,6 +310,186 @@ def export_incidents_excel(n: int = 10):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to export incidents: {str(e)}")
 
+@app.get("/api/incidents/{incident_id}/pdf")
+def get_incident_pdf(incident_id: str):
+    """
+    Generate and download a styled PDF report for a specific threat incident.
+    """
+    try:
+        from analytics.incidents import get_all_incidents
+        from io import BytesIO
+        from fastapi.responses import StreamingResponse
+        from reportlab.lib.pagesizes import letter
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib import colors
+        
+        # Get all incidents
+        incidents = get_all_incidents(state.posts_db)
+        incident = next((inc for inc in incidents if inc.get("incident_id") == incident_id), None)
+        
+        if not incident:
+            raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
+            
+        # Build PDF
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter,
+                                rightMargin=40, leftMargin=40,
+                                topMargin=40, bottomMargin=40)
+                                
+        styles = getSampleStyleSheet()
+        
+        # Custom styles to prevent overlap and support nice layout
+        title_style = ParagraphStyle(
+            'ReportTitle',
+            parent=styles['Heading1'],
+            fontName='Helvetica-Bold',
+            fontSize=18,
+            leading=22,
+            textColor=colors.HexColor('#991b1b'), # Rose-800
+            spaceAfter=15
+        )
+        
+        section_heading = ParagraphStyle(
+            'SectionHeading',
+            parent=styles['Heading2'],
+            fontName='Helvetica-Bold',
+            fontSize=12,
+            leading=16,
+            textColor=colors.HexColor('#1f2937'), # Zinc-800
+            spaceBefore=15,
+            spaceAfter=8
+        )
+        
+        normal_style = ParagraphStyle(
+            'ReportNormal',
+            parent=styles['Normal'],
+            fontName='Helvetica',
+            fontSize=10,
+            leading=14,
+            textColor=colors.HexColor('#374151') # Zinc-700
+        )
+        
+        meta_label_style = ParagraphStyle(
+            'MetaLabel',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold',
+            fontSize=10,
+            leading=14,
+            textColor=colors.HexColor('#111827')
+        )
+        
+        code_style = ParagraphStyle(
+            'ReportCode',
+            parent=styles['Code'],
+            fontName='Courier',
+            fontSize=9,
+            leading=12,
+            textColor=colors.HexColor('#111827')
+        )
+        
+        story = []
+        
+        # Title
+        story.append(Paragraph(f"THREAT INCIDENT REPORT: {incident_id}", title_style))
+        story.append(Spacer(1, 10))
+        
+        # Metadata Table
+        meta_data = [
+            [Paragraph("Severity:", meta_label_style), Paragraph(incident.get("severity", ""), normal_style),
+             Paragraph("Affected Geo:", meta_label_style), Paragraph(incident.get("affected_geo", ""), normal_style)],
+            [Paragraph("Category:", meta_label_style), Paragraph(incident.get("threat_category", ""), normal_style),
+             Paragraph("Timestamp:", meta_label_style), Paragraph(incident.get("timestamp", ""), normal_style)]
+        ]
+        
+        meta_table = Table(meta_data, colWidths=[80, 180, 80, 180])
+        meta_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#f9fafb')),
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#e5e7eb')),
+            ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#f3f4f6')),
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+            ('TOPPADDING', (0,0), (-1,-1), 8),
+            ('LEFTPADDING', (0,0), (-1,-1), 10),
+            ('RIGHTPADDING', (0,0), (-1,-1), 10),
+        ]))
+        story.append(meta_table)
+        story.append(Spacer(1, 15))
+        
+        # Incident Summary
+        story.append(Paragraph("Incident Summary", section_heading))
+        story.append(Paragraph(incident.get("summary", ""), normal_style))
+        story.append(Spacer(1, 15))
+        
+        # Related Posts
+        story.append(Paragraph("Matched Social Media Source Posts", section_heading))
+        related_posts = incident.get("related_posts", [])
+        
+        for idx, p in enumerate(related_posts, 1):
+            post_intro = f"<b>Post #{idx} ({p.get('platform', 'X')})</b> - User: <b>@{p.get('username')}</b> | Timestamp: {p.get('timestamp')}"
+            story.append(Paragraph(post_intro, normal_style))
+            
+            # Post Text boxed
+            post_text_table = Table([[Paragraph(p.get("text", ""), normal_style)]], colWidths=[520])
+            post_text_table.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#f3f4f6')),
+                ('BOX', (0,0), (-1,-1), 0.5, colors.HexColor('#d1d5db')),
+                ('TOPPADDING', (0,0), (-1,-1), 6),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+                ('LEFTPADDING', (0,0), (-1,-1), 8),
+                ('RIGHTPADDING', (0,0), (-1,-1), 8),
+            ]))
+            story.append(Spacer(1, 4))
+            story.append(post_text_table)
+            story.append(Spacer(1, 10))
+            
+        story.append(Spacer(1, 5))
+        
+        # Suggested Escalation Template
+        story.append(Paragraph("Suggested Duty Officer Escalation Template", section_heading))
+        
+        template_text = incident.get("suggested_escalation_template", "")
+        template_paragraphs = [Paragraph(line, code_style) for line in template_text.split('\n')]
+        
+        template_cell = []
+        for tp in template_paragraphs:
+            template_cell.append(tp)
+            
+        template_table = Table([[template_cell]], colWidths=[520])
+        template_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#fffbeb')), # Light amber
+            ('BOX', (0,0), (-1,-1), 0.5, colors.HexColor('#fef3c7')),
+            ('TOPPADDING', (0,0), (-1,-1), 8),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+            ('LEFTPADDING', (0,0), (-1,-1), 10),
+            ('RIGHTPADDING', (0,0), (-1,-1), 10),
+        ]))
+        story.append(template_table)
+        story.append(Spacer(1, 20))
+        
+        # Footer notice
+        footer_style = ParagraphStyle(
+            'ReportFooter',
+            parent=styles['Normal'],
+            fontName='Helvetica-Oblique',
+            fontSize=8,
+            leading=10,
+            textColor=colors.HexColor('#9ca3af'),
+            alignment=1 # Center
+        )
+        story.append(Paragraph(f"Report generated programmatically via Social Threat Analyzer Console on {time.strftime('%Y-%m-%d %H:%M:%S')}", footer_style))
+        
+        doc.build(story)
+        buffer.seek(0)
+        
+        return StreamingResponse(
+            buffer,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=incident_report_{incident_id}.pdf"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate PDF: {str(e)}")
+
 @app.get("/api/network-graph")
 def get_network_graph():
     """
@@ -338,7 +518,7 @@ async def stop_crawler_helper():
         state.task = None
 
 @app.post("/api/crawler/start")
-async def start_crawler():
+async def start_crawler(lookback_days: int = 7):
     if state.active:
         if state.mode == "mock":
             return {
@@ -349,17 +529,17 @@ async def start_crawler():
         else:
             await stop_crawler_helper()
     
-    state.crawler = MockCrawler()
+    state.crawler = MockCrawler(lookback_days=lookback_days)
     state.mode = "mock"
     state.active = True
     state.task = asyncio.create_task(crawler_worker())
     return {
         "status": "started",
-        "message": "Mock Crawler started successfully."
+        "message": f"Mock Crawler started successfully with lookback window of {lookback_days} days."
     }
 
 @app.post("/api/crawler/start-live")
-async def start_live_crawler(platform: str = "youtube", keywords: str = "Gujarat"):
+async def start_live_crawler(platform: str = "youtube", keywords: str = "Gujarat", lookback_days: int = 7):
     # Enforce access checks for Meta platforms
     meta_access_token = os.getenv("META_ACCESS_TOKEN")
     
@@ -396,30 +576,39 @@ async def start_live_crawler(platform: str = "youtube", keywords: str = "Gujarat
     # If active, stop the current worker before switching modes
     await stop_crawler_helper()
     
+    warning = None
+    if platform.lower() in ("twitter", "x") and lookback_days > 7:
+        warning = "X (Twitter) recent search endpoint limits lookback to the last 7 days."
+    elif platform.lower() in ("instagram", "facebook") and lookback_days > 7:
+        warning = "Meta Graph API recent hashtag/feed endpoints typically limit lookback to the last 7 days."
+    
     if platform.lower() == "instagram":
-        state.crawler = InstagramCrawler()
+        state.crawler = InstagramCrawler(lookback_days=lookback_days)
         state.mode = "instagram"
     elif platform.lower() == "facebook":
-        state.crawler = FacebookCrawler()
+        state.crawler = FacebookCrawler(lookback_days=lookback_days)
         state.mode = "facebook"
     elif platform.lower() in ("twitter", "x"):
-        state.crawler = TwitterCrawler()
+        state.crawler = TwitterCrawler(lookback_days=lookback_days)
         state.mode = "twitter"
     elif platform.lower() == "telegram":
-        state.crawler = TelegramCrawler()
+        state.crawler = TelegramCrawler(lookback_days=lookback_days)
         state.mode = "telegram"
     else:
-        state.crawler = YouTubeCrawler()
+        state.crawler = YouTubeCrawler(lookback_days=lookback_days)
         state.mode = "youtube"
         
     state.active = True
     
     kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
     state.task = asyncio.create_task(crawler_worker(keywords=kw_list))
-    return {
+    res_payload = {
         "status": "started",
         "message": f"Live {platform.upper()} Crawler started for keywords: {keywords}."
     }
+    if warning:
+        res_payload["warning"] = warning
+    return res_payload
 
 @app.post("/api/crawler/stop")
 async def stop_crawler():

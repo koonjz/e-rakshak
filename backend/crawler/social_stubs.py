@@ -64,7 +64,8 @@ class TwitterCrawler(BaseCrawler):
     Ingestion client for X (formerly Twitter) using the official Twitter API v2.
     """
     
-    def __init__(self):
+    def __init__(self, lookback_days: int = 7):
+        self.lookback_days = lookback_days
         self.bearer_token = os.getenv("TWITTER_BEARER_TOKEN")
         if not self.bearer_token:
             print("TwitterCrawler: TWITTER_BEARER_TOKEN is missing. Operating in standby mode.")
@@ -180,7 +181,8 @@ class InstagramCrawler(BaseCrawler):
     Ingestion client for Instagram using Meta Graph API (Graph API Webhooks & Search).
     """
     
-    def __init__(self):
+    def __init__(self, lookback_days: int = 7):
+        self.lookback_days = lookback_days
         self.app_id = os.getenv("META_APP_ID")
         self.app_secret = os.getenv("META_APP_SECRET")
         self.access_token = os.getenv("META_ACCESS_TOKEN")
@@ -267,7 +269,8 @@ class FacebookCrawler(BaseCrawler):
     Ingestion client for Facebook Page/Group posts using Meta Graph API.
     """
     
-    def __init__(self):
+    def __init__(self, lookback_days: int = 7):
+        self.lookback_days = lookback_days
         self.app_id = os.getenv("META_APP_ID")
         self.app_secret = os.getenv("META_APP_SECRET")
         self.access_token = os.getenv("META_ACCESS_TOKEN")
@@ -382,7 +385,8 @@ class YouTubeCrawler(BaseCrawler):
     Ingestion client for YouTube videos and comment threads using YouTube Data API v3.
     """
     
-    def __init__(self):
+    def __init__(self, lookback_days: int = 7):
+        self.lookback_days = lookback_days
         self.api_key = os.getenv("YOUTUBE_API_KEY")
         if not self.api_key or self.api_key.startswith("your_real_"):
             self.api_key = None
@@ -407,6 +411,11 @@ class YouTubeCrawler(BaseCrawler):
             if not cleaned_since.endswith("Z"):
                 cleaned_since += "Z"
             url += f"&publishedAfter={urllib.parse.quote(cleaned_since)}"
+        else:
+            from datetime import datetime, timedelta, timezone
+            cutoff_dt = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
+            published_after_str = cutoff_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            url += f"&publishedAfter={urllib.parse.quote(published_after_str)}"
             
         res = make_youtube_request(url)
         if not res["success"]:
@@ -483,6 +492,10 @@ class YouTubeCrawler(BaseCrawler):
         print(f"YouTubeCrawler: Starting live polling stream for '{q}'")
         
         search_url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&q={urllib.parse.quote(q)}&type=video&maxResults=5&key={self.api_key}"
+        from datetime import datetime, timedelta, timezone
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
+        published_after_str = cutoff_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        search_url += f"&publishedAfter={urllib.parse.quote(published_after_str)}"
         res = make_youtube_request(search_url)
         if not res["success"]:
             yield {
@@ -552,7 +565,8 @@ class TelegramCrawler(BaseCrawler):
     Ingestion client for Telegram channels using MTProto Client API (Telethon).
     """
     
-    def __init__(self):
+    def __init__(self, lookback_days: int = 7):
+        self.lookback_days = lookback_days
         current_dir = os.path.dirname(os.path.abspath(__file__))
         self.session_path = os.path.abspath(os.path.join(current_dir, "..", "..", "telegram_session"))
         
@@ -612,10 +626,16 @@ class TelegramCrawler(BaseCrawler):
                         {"city": "Gandhinagar", "latitude": 23.2156, "longitude": 72.6369}
                     ]
                     
+                    from datetime import timezone, timedelta
+                    cutoff_date = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
+                    
                     for channel in channels:
                         try:
-                            async for message in client.iter_messages(channel, limit=10):
+                            # Use offset_date to fetch messages starting from lookback window cutoff, reverse=True to fetch newer
+                            async for message in client.iter_messages(channel, limit=10, offset_date=cutoff_date, reverse=True):
                                 if not message.text:
+                                    continue
+                                if message.date and message.date < cutoff_date:
                                     continue
                                 if keywords:
                                     text_lower = message.text.lower()
@@ -701,8 +721,12 @@ class TelegramCrawler(BaseCrawler):
             while True:
                 for channel in channels:
                     try:
+                        from datetime import timezone, timedelta
+                        cutoff_date = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
                         async for message in client.iter_messages(channel, limit=5):
                             if not message.text:
+                                continue
+                            if message.date and message.date < cutoff_date:
                                 continue
                             if keywords:
                                 text_lower = message.text.lower()

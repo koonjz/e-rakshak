@@ -11,7 +11,8 @@ class MockCrawler(BaseCrawler):
     to simulate real-time social media activity.
     """
     
-    def __init__(self, data_path: str = None):
+    def __init__(self, data_path: str = None, lookback_days: int = 7):
+        self.lookback_days = lookback_days
         if data_path is None:
             # Resolve path relative to backend/crawler/mock.py
             current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -27,7 +28,27 @@ class MockCrawler(BaseCrawler):
         else:
             self.data_path = data_path
             
-        self.posts = self._load_posts()
+        raw_posts = self._load_posts()
+        
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        cutoff = now - timedelta(days=lookback_days)
+        
+        filtered = []
+        for post in raw_posts:
+            ts_str = post.get("timestamp")
+            if not ts_str:
+                continue
+            try:
+                clean_ts = ts_str.split(".")[0].rstrip("Z")
+                ts_dt = datetime.fromisoformat(clean_ts)
+                if ts_dt >= cutoff:
+                    filtered.append(post)
+            except Exception:
+                pass
+                
+        print(f"MockCrawler: Filtered dataset to {len(filtered)} / {len(raw_posts)} posts within last {lookback_days} days (cutoff: {cutoff.isoformat()}).")
+        self.posts = filtered
 
     def _load_posts(self) -> List[Dict[str, Any]]:
         if not os.path.exists(self.data_path):
