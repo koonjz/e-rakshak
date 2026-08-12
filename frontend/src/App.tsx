@@ -1552,12 +1552,11 @@ function App() {
                 <input
                   type="number"
                   min={1}
-                  max={30}
                   value={lookbackDays}
                   onChange={(e) => {
                     const val = parseInt(e.target.value, 10);
                     if (!isNaN(val)) {
-                      setLookbackDays(Math.min(Math.max(val, 1), 30));
+                      setLookbackDays(Math.max(val, 1));
                     } else {
                       setLookbackDays(7);
                     }
@@ -2048,7 +2047,7 @@ function App() {
                 {isAnalyzingImage ? 'ANALYZING MEME...' : 'ANALYZE IMAGE'}
               </button>
 
-              {/* Graceful setup instructions if Tesseract is missing */}
+              {/* Graceful setup instructions if Tesseract is missing and visual results not yet run */}
               {imageAnalysisResult && imageAnalysisResult.status === 'pending_setup' && (
                 <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-lg text-[9px] leading-relaxed">
                   <div className="font-extrabold uppercase text-[10px] tracking-wider mb-1 flex items-center gap-1">
@@ -2063,16 +2062,31 @@ function App() {
               {/* Extraction result displays */}
               {imageAnalysisResult && imageAnalysisResult.status === 'success' && (
                 <div className="space-y-3 font-mono text-[10px]">
-                  <div className="p-2.5 bg-zinc-950 border border-zinc-900 rounded select-text">
-                    <span className="text-zinc-500 block uppercase font-bold tracking-wider text-[8px] mb-1">Extracted Text</span>
-                    {imageAnalysisResult.extracted_text ? (
-                      <p className="text-zinc-200 whitespace-pre-wrap font-sans break-all leading-normal">{imageAnalysisResult.extracted_text}</p>
-                    ) : (
-                      <span className="text-zinc-600 italic">No text detected in image.</span>
-                    )}
-                  </div>
+                  
+                  {/* Inline Tesseract missing warning */}
+                  {imageAnalysisResult.ocr_status === 'tesseract_not_found' && (
+                    <div className="p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-lg leading-normal">
+                      <div className="font-extrabold uppercase text-[9px] tracking-wider mb-1 flex items-center gap-1">
+                        ⚠️ Tesseract OCR Binary Missing (OCR Disabled)
+                      </div>
+                      <p className="text-zinc-400 text-[9px] font-mono leading-relaxed select-text">
+                        Tesseract was not found. Image text extraction is disabled. Install Tesseract to enable OCR.
+                      </p>
+                    </div>
+                  )}
 
-                  {imageAnalysisResult.extracted_text && (
+                  {imageAnalysisResult.ocr_status === 'success' && (
+                    <div className="p-2.5 bg-zinc-950 border border-zinc-900 rounded select-text">
+                      <span className="text-zinc-500 block uppercase font-bold tracking-wider text-[8px] mb-1">Extracted Text</span>
+                      {imageAnalysisResult.extracted_text ? (
+                        <p className="text-zinc-200 whitespace-pre-wrap font-sans break-all leading-normal">{imageAnalysisResult.extracted_text}</p>
+                      ) : (
+                        <span className="text-zinc-600 italic">No text detected in image.</span>
+                      )}
+                    </div>
+                  )}
+
+                  {imageAnalysisResult.ocr_status === 'success' && imageAnalysisResult.extracted_text && (
                     <div className="p-3 rounded bg-zinc-950 border border-zinc-900 space-y-1.5">
                       <div className="flex justify-between">
                         <span className="text-zinc-500">Detected Language</span>
@@ -2100,6 +2114,41 @@ function App() {
                           />
                         </div>
                       </div>
+                    </div>
+                  )}
+
+                  {/* Visual classification labels */}
+                  {imageAnalysisResult.visual_labels && imageAnalysisResult.visual_labels.length > 0 && (
+                    <div className="p-3 rounded bg-zinc-950 border border-zinc-900 space-y-2.5">
+                      <span className="text-zinc-500 block uppercase font-bold tracking-wider text-[8px] border-b border-zinc-900 pb-1">Visual Classifications (CLIP)</span>
+                      {imageAnalysisResult.visual_labels.map((vl: any, idx: number) => (
+                        <div key={idx} className="space-y-1">
+                          <div className="flex justify-between">
+                            <span className="text-zinc-400 font-semibold">{vl.label}</span>
+                            <span className="text-indigo-400 font-semibold">{Math.round(vl.score * 100)}%</span>
+                          </div>
+                          <div className="h-1 w-full bg-zinc-900 rounded-full overflow-hidden">
+                            <div 
+                              className="h-full rounded-full bg-indigo-500" 
+                              style={{ width: `${Math.round(vl.score * 100)}%` }} 
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Combined Overall Assessment */}
+                  {imageAnalysisResult.overall_assessment && (
+                    <div className={`p-3 rounded border font-sans text-xs ${
+                      imageAnalysisResult.overall_assessment.includes("Disagreement")
+                        ? 'bg-amber-950/20 border-amber-900/60 text-amber-300'
+                        : imageAnalysisResult.overall_assessment.includes("active threat")
+                        ? 'bg-rose-950/20 border-rose-900/60 text-rose-300'
+                        : 'bg-zinc-900/60 border-zinc-800 text-zinc-300'
+                    }`}>
+                      <span className="text-[8px] uppercase tracking-wider font-bold block mb-1 font-mono text-zinc-500">Combined Assessment</span>
+                      <p className="font-semibold leading-relaxed">{imageAnalysisResult.overall_assessment}</p>
                     </div>
                   )}
                 </div>

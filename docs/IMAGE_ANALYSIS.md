@@ -68,3 +68,57 @@ To make Indic OCR viable for social media memes in production, a pre-processing 
 1. **Sauvola Binarization**: Adaptive thresholding designed to isolate text by converting color images to clean black-and-white, stripping background gradients.
 2. **Text Region Localization**: Using deep learning detectors (e.g. CRAFT or DBNet) to locate text bounding boxes, cropping out the background before passing the text region to Tesseract.
 3. **Contrast Enhancement**: Histogram equalization to sharpen glyph edges.
+
+---
+
+## 👁️ CLIP Zero-Shot Visual Classification
+
+To complement text-based OCR threat analysis, we integrated a zero-shot visual classification pipeline using the pre-trained `openai/clip-vit-base-patch32` model. This runs on-demand (lazy-loaded on the first API call) to provide pictorial understanding of the image content without requiring explicit training on specific threat classes.
+
+### 1. Candidate Labels & Visual Scope
+The model compares visual image embeddings against a text-defined set of candidate labels mapping to common threat-monitoring domains:
+*   `"a crowd of people protesting"`
+*   `"a burning building or fire"`
+*   `"property damage or vandalism"`
+*   `"a weapon or armed person"`
+*   `"a peaceful gathering"`
+*   `"a natural disaster or flood"`
+*   `"an ordinary photo with no threat content"`
+
+The top 3 matches are returned with normalized confidence scores.
+
+### 2. Multi-Modal Unified Assessment
+OCR text outputs and CLIP visual outputs are evaluated together at the API level:
+*   **Agreement (Both Threatening)**: When both the extracted text and the visual elements present active threat signals.
+*   **Agreement (Both Neutral)**: When no threats are detected in either text or visual elements.
+*   **Disagreement (Threatening Text on Innocent Image)**: Highlighted when text contains a threat (e.g. violent caption) overlaying an innocuous photo.
+*   **Disagreement (Threatening Visual with Neutral Text)**: Highlighted when the visual scene is alarming (e.g. protest or weapon) but contains no threat text.
+
+---
+
+## 🧪 CLIP System Verification & Real-World Limitations
+
+To evaluate the pipeline's real performance, we ran a verification suite across 4 programmatic image scenarios:
+
+| Scenario | OCR Text Output | Top Visual Label (CLIP) | CLIP Score | Overall Assessment |
+| :--- | :--- | :--- | :--- | :--- |
+| **Protest Scene** | `''` | `a burning building or fire` | 36.4% | *Disagreement: Visually alarming scene detected with neutral/no text.* |
+| **Neutral Flower** | `''` | `an ordinary photo with no threat content` | 37.8% | *Agreement: No threat content detected in either text or visual elements.* |
+| **Text-Only Threat** | `'KILLALL TRAITORS...'` | `a burning building or fire` | 98.8% | *Agreement: Both text and visual content present active threat indicators.* |
+| **Combined Threat** | `'PROTESTIN PEACE.'` | `a burning building or fire` | 89.8% | *Agreement: Both text and visual content present active threat indicators.* |
+
+### ⚠️ Critical Limitations of Zero-Shot CLIP Classification
+
+An analyst utilizing the Social Threat Analyzer must remain aware of several inherent limitations of CLIP zero-shot classification:
+
+1. **Inherently Approximate (Zero-Shot Uncertainty)**: 
+   As observed in the **Protest Scene** scenario, CLIP can get confused by abstract drawings or stylized shapes, predicting `"a burning building or fire"` (36.4%) instead of `"a crowd of people protesting"` (27.5%). It is a statistical pattern matching tool, not a human reasoning engine.
+2. **Text Leakage into Visual Embeddings**: 
+   In the **Text-Only Threat** scenario, despite the image having *only text* and zero actual picture content, CLIP predicted `"a burning building or fire"` with **98.8% confidence**. This happens because CLIP's visual encoder was pre-trained to read written text embedded in images. The word `"BURN"` in the image text leaked into the image embedding, heavily biasing the prediction.
+3. **Uncalibrated Confidence Scores**: 
+   The CLIP confidence scores are the result of a softmax layer over a closed set of candidate labels. They represent *relative probability distribution across the chosen candidates*, not calibrated, absolute probabilities of the event occurring. An 89.8% confidence score does not mean there is an 89.8% absolute chance of a fire being present.
+4. **Context Blindness**: 
+   CLIP lacks real-world contextual understanding. It can misidentify a peaceful protest sign, a training exercise, or a film set as a high-threat situation.
+5. **Analyst Signal Recommendation**: 
+   Because of these limitations, CLIP visual classifications should always be treated as a **preliminary signal to highlight files for manual human review**, rather than a definitive automated decision-maker.
+

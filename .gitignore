@@ -28,3 +28,13 @@ dist-ssr/
 .idea/
 .gemini/
 antigravity-ide/
+
+# Custom Cache / Large Dependencies
+t/
+test_*.png
+test_*.webp
+*.png
+*.webp
+*.xlsx
+*.pdf
+
