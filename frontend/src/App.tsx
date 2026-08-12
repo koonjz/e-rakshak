@@ -71,7 +71,7 @@ function CoordinationNetworkGraph() {
       if (res.ok) {
         const data = await res.json();
         setNeo4jAvailable(!!data.neo4j_available);
-        if (data.neo4j_available && data.nodes) {
+        if (data.nodes) {
           // Initialize coordinates if not set, keep existing if already there to avoid jarring jumps
           const width = 720;
           const height = 480;
@@ -425,7 +425,7 @@ function CoordinationNetworkGraph() {
           </div>
         </div>
 
-        {neo4jAvailable === false ? (
+        {neo4jAvailable === false && networkData.nodes.length === 0 ? (
           <div className="h-[480px] border border-dashed border-zinc-800 rounded bg-zinc-950/20 flex flex-col items-center justify-center p-6 text-center space-y-4">
             <div className="w-12 h-12 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-lg text-rose-500">
               ⚠️
@@ -1643,6 +1643,7 @@ function App() {
                   </div>
                 </div>
               </div>
+            )}
             {/* API limit notice banner */}
             {crawlerWarning && (
               <div className="p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-lg text-[11px] font-mono flex items-start gap-2.5">

@@ -10,4 +10,6 @@ python-multipart
 neo4j
 openpyxl
 reportlab
+torch
+transformers
 

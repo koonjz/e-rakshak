@@ -498,6 +498,68 @@ def get_network_graph():
     try:
         from analytics.graph_db import graph_manager
         res = graph_manager.get_network_graph()
+        
+        # Fallback to computing graph from in-memory coordination clusters if Neo4j is offline
+        if not graph_manager.available:
+            from analytics.coordination import detect_coordinated_behavior
+            clusters = detect_coordinated_behavior(state.posts_db)
+            
+            nodes = []
+            edges = []
+            node_map = {}
+            
+            for cluster in clusters:
+                member_accounts = cluster.get("member_accounts", [])
+                heuristics = cluster.get("heuristics", [])
+                heuristic_label = ", ".join(heuristics) if heuristics else "Coordinated"
+                suspicion_score = cluster.get("suspicion_score", 50)
+                
+                for username in member_accounts:
+                    matched_posts = [p for p in state.posts_db if p.get("username") == username]
+                    platform = matched_posts[0].get("platform", "Mock") if matched_posts else "Mock"
+                    post_count = len(matched_posts)
+                    
+                    if username not in node_map:
+                        node_map[username] = {
+                            "id": username,
+                            "label": username,
+                            "platform": platform,
+                            "post_count": post_count,
+                            "suspicion": suspicion_score
+                        }
+                    else:
+                        node_map[username]["suspicion"] = max(node_map[username]["suspicion"], suspicion_score)
+                        node_map[username]["post_count"] = max(node_map[username]["post_count"], post_count)
+                        
+                n_members = len(member_accounts)
+                for i in range(n_members):
+                    for j in range(i + 1, n_members):
+                        u1, u2 = sorted([member_accounts[i], member_accounts[j]])
+                        edges.append({
+                            "from": u1,
+                            "to": u2,
+                            "heuristic": heuristic_label,
+                            "suspicion_score": suspicion_score
+                        })
+                        
+            # Include other active posters as neutral background nodes
+            for p in state.posts_db:
+                username = p.get("username")
+                if username and username not in node_map:
+                    node_map[username] = {
+                        "id": username,
+                        "label": username,
+                        "platform": p.get("platform", "Mock"),
+                        "post_count": 1,
+                        "suspicion": 0
+                    }
+                    
+            res = {
+                "status": "fallback_success",
+                "nodes": list(node_map.values()),
+                "edges": edges
+            }
+            
         return {
             "neo4j_available": graph_manager.available,
             "status": res["status"],
