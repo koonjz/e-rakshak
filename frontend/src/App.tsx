@@ -1102,7 +1102,9 @@ function App() {
 
     // Compute coordinate points
     const points = trendsData.map((pt, i) => {
-      const x = padding + (i * chartWidth) / (trendsData.length - 1)
+      const x = trendsData.length > 1
+        ? padding + (i * chartWidth) / (trendsData.length - 1)
+        : padding + chartWidth / 2
       const y = height - padding - (pt.post_count * chartHeight) / maxVal
       return { x, y, pt }
     })
