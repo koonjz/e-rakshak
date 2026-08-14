@@ -556,9 +556,15 @@ function App() {
   const [activeAlerts, setActiveAlerts] = useState<AlertItem[]>([])
   
   // Incidents states
-  const [activeTab, setActiveTab] = useState<'monitor' | 'incidents' | 'network'>('monitor')
+  const [activeTab, setActiveTab] = useState<'monitor' | 'incidents' | 'network' | 'assistant'>('monitor')
   const [incidents, setIncidents] = useState<any[]>([])
   const [expandedIncident, setExpandedIncident] = useState<string | null>(null)
+
+  // AI Assistant states
+  const [chatHistory, setChatHistory] = useState<any[]>([])
+  const [chatInput, setChatInput] = useState<string>('')
+  const [isSendingQuery, setIsSendingQuery] = useState<boolean>(false)
+
   
   // Incident filter states
   const [filterIncidentSeverity, setFilterIncidentSeverity] = useState<string>('All')
@@ -860,6 +866,54 @@ function App() {
       console.error('Failed to connect to image analysis API', err)
     } finally {
       setIsAnalyzingImage(false)
+    }
+  }
+
+  const handleSendAssistantQuery = async (customQuestion?: string) => {
+    const question = customQuestion !== undefined ? customQuestion : chatInput;
+    if (!question.trim()) return;
+
+    if (customQuestion === undefined) {
+      setChatInput('');
+    }
+
+    const newUserMessage = { role: 'user', content: question };
+    setChatHistory(prev => [...prev, newUserMessage]);
+    setIsSendingQuery(true);
+
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/assistant/query', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ question })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const newAssistantMessage = {
+          role: 'assistant',
+          content: data.answer,
+          dataUsed: data.data_used
+        };
+        setChatHistory(prev => [...prev, newAssistantMessage]);
+      } else {
+        const newAssistantMessage = {
+          role: 'assistant',
+          content: "Failed to communicate with assistant API server.",
+          dataUsed: null
+        };
+        setChatHistory(prev => [...prev, newAssistantMessage]);
+      }
+    } catch (err) {
+      const newAssistantMessage = {
+        role: 'assistant',
+        content: `Error: Could not connect to the API server.`,
+        dataUsed: null
+      };
+      setChatHistory(prev => [...prev, newAssistantMessage]);
+    } finally {
+      setIsSendingQuery(false);
     }
   }
 
@@ -1280,6 +1334,16 @@ function App() {
         >
           🕸️ Coordination Network
         </button>
+        <button
+          onClick={() => setActiveTab('assistant')}
+          className={`px-6 py-2.5 font-mono text-xs font-bold uppercase tracking-widest border-b-2 cursor-pointer transition-all flex items-center gap-2 ${
+            activeTab === 'assistant' 
+              ? 'border-emerald-500 text-emerald-400 bg-emerald-950/10' 
+              : 'border-transparent text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          💬 AI Assistant
+        </button>
       </div>
 
       {/* Main Content Layout */}
@@ -1484,6 +1548,120 @@ function App() {
       ) : activeTab === 'network' ? (
         <main className="flex-1 max-w-7xl mx-auto px-6 py-6 w-full relative z-10">
           <CoordinationNetworkGraph />
+        </main>
+      ) : activeTab === 'assistant' ? (
+        <main className="flex-1 max-w-7xl mx-auto px-6 py-6 w-full relative z-10">
+          <div className="bg-zinc-900/40 border border-zinc-900 rounded-xl p-5 backdrop-blur-md shadow-xl flex flex-col h-[600px]">
+            {/* Header */}
+            <div className="border-b border-zinc-900 pb-3 flex justify-between items-center">
+              <div>
+                <h3 className="text-xs font-extrabold uppercase tracking-widest text-zinc-400 font-mono flex items-center gap-2">
+                  💬 Data-Aware AI Assistant
+                </h3>
+                <p className="text-[10px] text-zinc-500 font-mono">
+                  Powered by Gemini 1.5 Flash • Rule-Based Factual Grounding
+                </p>
+              </div>
+            </div>
+
+            {/* Chat message area */}
+            <div className="flex-1 overflow-y-auto py-4 space-y-4 pr-2 scrollbar-thin scrollbar-thumb-zinc-800">
+              {chatHistory.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center space-y-4 text-zinc-500 font-mono text-[10px]">
+                  <span className="text-3xl">🤖</span>
+                  <div className="max-w-md">
+                    <p className="font-bold text-zinc-400">Welcome to the Threat Intelligence Assistant</p>
+                    <p className="text-zinc-600 mt-1 leading-relaxed">
+                      Ask deterministic questions about incidents, threat trends, bot coordination clusters, or system status. The assistant will retrieve live database context to answer.
+                    </p>
+                  </div>
+                  
+                  {/* Suggestion Chips */}
+                  <div className="flex flex-wrap gap-2 justify-center max-w-lg mt-4">
+                    {[
+                      "How many incidents in Rajkot?",
+                      "Summarize the coordination clusters",
+                      "What's the current threat trend?",
+                      "Overall system status",
+                      "Lookup cluster CLUSTER_01"
+                    ].map((s, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => handleSendAssistantQuery(s)}
+                        className="px-3 py-1.5 rounded-full bg-zinc-950 border border-zinc-800 hover:border-indigo-500 hover:text-indigo-400 text-zinc-400 font-bold transition-all cursor-pointer"
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                chatHistory.map((msg: any, idx: number) => (
+                  <div
+                    key={idx}
+                    className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div
+                      className={`max-w-2xl rounded-lg p-3.5 font-sans text-xs space-y-2 leading-relaxed ${
+                        msg.role === 'user'
+                          ? 'bg-indigo-600 text-white rounded-br-none'
+                          : 'bg-zinc-950/80 border border-zinc-900 text-zinc-300 rounded-bl-none'
+                      }`}
+                    >
+                      <span className="block text-[8px] font-mono uppercase tracking-widest font-extrabold text-zinc-500">
+                        {msg.role === 'user' ? 'Analyst' : 'Assistant'}
+                      </span>
+                      <p className="whitespace-pre-wrap select-text">{msg.content}</p>
+                      
+                      {msg.dataUsed && Object.keys(msg.dataUsed).length > 0 && (
+                        <div className="pt-2 border-t border-zinc-900 font-mono text-[9px]">
+                          <details className="cursor-pointer group">
+                            <summary className="text-indigo-400 font-bold hover:text-indigo-300 select-none">
+                              🔍 View Real System Data Backing Answer
+                            </summary>
+                            <pre className="mt-2 bg-zinc-950/90 border border-zinc-900 rounded p-2.5 overflow-auto max-h-[160px] text-indigo-300 select-text">
+                              {JSON.stringify(msg.dataUsed, null, 2)}
+                            </pre>
+                          </details>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+              {isSendingQuery && (
+                <div className="flex justify-start">
+                  <div className="bg-zinc-950/80 border border-zinc-900 rounded-lg p-3 rounded-bl-none text-zinc-500 font-mono text-[10px] flex items-center gap-2">
+                    <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full" />
+                    Assistant is querying live database...
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Input area */}
+            <div className="border-t border-zinc-900 pt-3 flex gap-2">
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !isSendingQuery) {
+                    handleSendAssistantQuery(chatInput);
+                  }
+                }}
+                placeholder="Ask about incidents, trends, bot clusters, or system status..."
+                className="flex-1 text-[11px] font-mono bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-zinc-300 placeholder:text-zinc-700 focus:border-indigo-500 focus:outline-none"
+              />
+              <button
+                onClick={() => handleSendAssistantQuery(chatInput)}
+                disabled={isSendingQuery || !chatInput.trim()}
+                className="px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-mono text-[11px] font-bold uppercase tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              >
+                Send
+              </button>
+            </div>
+          </div>
         </main>
       ) : (
         <main className="flex-1 max-w-7xl mx-auto px-6 py-6 w-full grid grid-cols-1 lg:grid-cols-12 gap-6 relative z-10">

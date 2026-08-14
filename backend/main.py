@@ -738,6 +738,19 @@ async def analyze_image_route(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Image analysis failed: {str(e)}")
 
+class AssistantQueryRequest(BaseModel):
+    question: str
+
+@app.post("/api/assistant/query")
+def assistant_query(request: AssistantQueryRequest):
+    try:
+        from assistant.query_router import answer_question
+        res = answer_question(request.question, state.posts_db)
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Assistant query failed: {str(e)}")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
