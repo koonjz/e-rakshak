@@ -124,6 +124,8 @@ class MockCrawler(BaseCrawler):
                 # Set dynamic simulated timestamp (current time)
                 from datetime import datetime
                 simulated_post["timestamp"] = datetime.now().isoformat()
+                # Synthetic mock posts have no real source URL
+                simulated_post.setdefault("source_url", None)
                 
                 yield simulated_post
                 

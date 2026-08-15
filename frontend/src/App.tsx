@@ -16,6 +16,7 @@ interface Post {
   text: string;
   language: string;
   threat_category: string;
+  source_url?: string | null;
   engagement: { likes: number; shares: number; comments: number };
   geo: { city: string; latitude: number; longitude: number };
   user_profile?: { account_created_date: string; follower_count: number; following_count: number };
@@ -762,9 +763,11 @@ function App() {
       if (res.ok) {
         const newPosts: Post[] = await res.json()
         if (newPosts.length > 0) {
-          // Prepend new posts and limit history to last 100
+          // Prepend new posts, deduplicate by id, and limit history to last 100
           setPostsFeed(prev => {
-            const updated = [...newPosts, ...prev]
+            const existingIds = new Set(prev.map(p => p.id))
+            const deduped = newPosts.filter(p => !existingIds.has(p.id))
+            const updated = [...deduped, ...prev]
             return updated.slice(0, 100)
           })
 
@@ -1973,6 +1976,19 @@ function App() {
                         <span>LANG: <strong className="text-zinc-400">{post.language.toUpperCase()}</strong></span>
                         {post.user_profile && (
                           <span>FOLLOWERS: <strong className="text-zinc-400">{post.user_profile.follower_count}</strong></span>
+                        )}
+                        {post.source_url ? (
+                          <a
+                            href={post.source_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2 transition-colors"
+                            title="View original post"
+                          >
+                            ↗ SOURCE
+                          </a>
+                        ) : (
+                          <span className="text-zinc-700" title="Direct post URL not available">↗ N/A</span>
                         )}
                       </div>
                     </div>
