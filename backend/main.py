@@ -37,7 +37,7 @@ class AppState:
     def __init__(self):
         self.task: asyncio.Task = None
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=2000)
-        self.crawler = MockCrawler()
+        self.crawler = MockCrawler(lookback_days=30)
         self.active = False
         self.mode = "mock"  # Current active crawler mode: "mock" or "youtube"
         # Instantiate the TF-IDF hybrid classifier once
@@ -147,7 +147,8 @@ def health_check():
         "status": "healthy",
         "timestamp": time.time(),
         "service": "social-threat-analyzer-backend",
-        "version": "0.1.0"
+        "version": "0.1.0",
+        "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
     }
 
 @app.post("/api/classify")

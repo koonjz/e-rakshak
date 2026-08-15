@@ -190,7 +190,8 @@ def answer_question(question: str, posts_db: list) -> Dict[str, Any]:
             "4. Keep the answer concise and direct."
         )
         
-        model = genai.GenerativeModel("gemini-3.5-flash", system_instruction=system_instruction)
+        gemini_model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+        model = genai.GenerativeModel(gemini_model_name, system_instruction=system_instruction)
         
         prompt = f"User Question: {question}\n\nReal System Data:\n{data}"
         

@@ -5,6 +5,7 @@ interface HealthResponse {
   timestamp: number;
   service: string;
   version: string;
+  gemini_model?: string;
 }
 
 interface Post {
@@ -1561,7 +1562,7 @@ function App() {
                   💬 Data-Aware AI Assistant
                 </h3>
                 <p className="text-[10px] text-zinc-500 font-mono">
-                  Powered by Gemini 1.5 Flash • Rule-Based Factual Grounding
+                  Powered by {healthData?.gemini_model || 'Gemini'} • Rule-Based Factual Grounding
                 </p>
               </div>
             </div>
