@@ -180,8 +180,6 @@ def answer_question(question: str, posts_db: list) -> Dict[str, Any]:
         
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        
         system_instruction = (
             "You are a helpful data assistant for the Social Threat Analyzer application.\n"
             "Your task is to phrase a natural-language answer to the user's question using ONLY the provided real data.\n"
@@ -192,12 +190,13 @@ def answer_question(question: str, posts_db: list) -> Dict[str, Any]:
             "4. Keep the answer concise and direct."
         )
         
+        model = genai.GenerativeModel("gemini-3.5-flash", system_instruction=system_instruction)
+        
         prompt = f"User Question: {question}\n\nReal System Data:\n{data}"
         
         response = model.generate_content(
             prompt,
-            generation_config={"temperature": 0.0},
-            system_instruction=system_instruction
+            generation_config={"temperature": 0.0}
         )
         
         answer = response.text.strip()
