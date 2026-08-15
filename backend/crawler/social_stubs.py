@@ -19,23 +19,34 @@ load_dotenv(dotenv_path=dotenv_path)
 # Env-var helpers
 # ---------------------------------------------------------------------------
 
-def _read_channel_list(env_var: str, label: str) -> List[str]:
+def _is_enabled(env_var: str, default: bool = True) -> bool:
+    """Read a boolean env var. Treats missing/empty as the default."""
+    val = os.getenv(env_var, "").strip().lower()
+    if not val:
+        return default
+    return val not in ("false", "0", "no", "off")
+
+
+def _read_seed_list(env_var: str) -> List[str]:
     """
-    Parse a comma-separated list of channel/page identifiers from an env var.
-    Strips leading '@' for uniformity and returns clean strings.
-    Logs a warning and returns [] when the env var is missing or empty.
+    Read an optional comma-separated list of channel/page identifiers.
+    Returns [] silently when the env var is unset or empty — an empty list
+    means 'no manually specified seeds' rather than 'disabled'.
+    Strips leading '@' for uniformity.
     """
     raw = os.getenv(env_var, "").strip()
     if not raw:
-        print(
-            f"[crawler] WARNING: {env_var} is not set. "
-            f"{label} crawler will not extract from any source. "
-            f"Set {env_var} in your .env file as a comma-separated list."
-        )
         return []
-    channels = [c.strip().lstrip("@") for c in raw.split(",") if c.strip()]
-    print(f"[crawler] {label} sources loaded from {env_var}: {channels}")
-    return channels
+    return [c.strip().lstrip("@") for c in raw.split(",") if c.strip()]
+
+
+# Global discovery settings — read once at module load.
+# SOCIAL_AUTO_DISCOVERY: when true (default), crawlers attempt keyword-driven
+#   source discovery before falling back to manually specified seeds.
+# SOCIAL_SOURCE_MODE: 'auto' (default) or 'manual'. In 'manual' mode only
+#   manually specified seeds (TELEGRAM_CHANNELS / FACEBOOK_PAGES) are used.
+AUTO_DISCOVERY: bool = _is_enabled("SOCIAL_AUTO_DISCOVERY", default=True)
+SOURCE_MODE: str = os.getenv("SOCIAL_SOURCE_MODE", "auto").strip().lower()
 
 
 # ---------------------------------------------------------------------------
@@ -320,22 +331,94 @@ class InstagramCrawler(BaseCrawler):
 
 class FacebookCrawler(BaseCrawler):
     """
-    Ingestion client for Facebook Page posts using Meta Graph API.
+    Ingestion client for Facebook using Meta Graph API.
 
-    Target pages are read from the FACEBOOK_PAGES environment variable
-    (comma-separated page IDs or slugs). No page is hardcoded.
-    Each post includes a source_url when constructable.
+    Discovery mode (SOCIAL_AUTO_DISCOVERY=true, default):
+        Attempts automatic page discovery via GET /search?type=page&q=<keyword>.
+        Falls back gracefully when the token lacks 'pages_search' permission.
+        FACEBOOK_PAGES seeds are merged with any auto-discovered pages.
+
+    Manual mode (SOCIAL_SOURCE_MODE=manual):
+        Only fetches from pages explicitly listed in FACEBOOK_PAGES.
+
+    Disabled (ENABLE_FACEBOOK=false):
+        Returns a disabled status immediately without making any API calls.
+
+    Note: Meta Graph API removed general public-post keyword search in 2018.
+    Page discovery via /search?type=page requires 'pages_search' permission.
     """
 
     def __init__(self, lookback_days: int = 7):
         self.lookback_days = lookback_days
+        self.enabled = _is_enabled("ENABLE_FACEBOOK", default=True)
+        self.auto_discovery = AUTO_DISCOVERY
+        self.source_mode = SOURCE_MODE
         self.app_id = os.getenv("META_APP_ID")
         self.app_secret = os.getenv("META_APP_SECRET")
         self.access_token = os.getenv("META_ACCESS_TOKEN")
-        # Discover pages from env — no hardcoded defaults
-        self.pages = _read_channel_list("FACEBOOK_PAGES", "FacebookCrawler")
+        # Optional seed pages — merged with auto-discovered pages, not a restriction
+        self.seed_pages = _read_seed_list("FACEBOOK_PAGES")
+        if self.seed_pages:
+            print(f"[crawler] FacebookCrawler: {len(self.seed_pages)} seed page(s): {self.seed_pages}")
         if not self.access_token:
             print("FacebookCrawler: META_ACCESS_TOKEN is missing. Operating in review-scaffold mode.")
+        if not self.enabled:
+            print("[crawler] FacebookCrawler: disabled via ENABLE_FACEBOOK=false")
+
+    def _discover_pages(self, keywords: List[str]) -> List[str]:
+        """
+        Attempt to discover relevant Facebook pages via keyword search.
+
+        Calls GET /v20.0/search?type=page&q=<keyword>. This requires the
+        'pages_search' permission on the access token. If the endpoint
+        returns a 400/403, logs a clear explanation and returns [] — it does
+        NOT raise an exception or block other operations.
+
+        Returns a list of numeric page IDs discovered.
+        """
+        if not self.access_token or not keywords:
+            return []
+        query = " ".join(keywords[:3])  # Use up to 3 keywords for the query
+        url = (
+            f"https://graph.facebook.com/v20.0/search"
+            f"?q={urllib.parse.quote(query)}&type=page"
+            f"&fields=id,name&limit=10"
+            f"&access_token={self.access_token}"
+        )
+        res = make_meta_request(url)
+        if res["success"]:
+            pages = [item["id"] for item in res["data"].get("data", []) if item.get("id")]
+            if pages:
+                names = [item.get("name", item["id"]) for item in res["data"].get("data", []) if item.get("id")]
+                print(f"[crawler] FacebookCrawler: Auto-discovered {len(pages)} page(s): {names}")
+            return pages
+        sc = res.get("status_code", 0)
+        if sc in (400, 403):
+            print(
+                f"[crawler] FacebookCrawler: Auto-discovery unavailable — "
+                f"token lacks 'pages_search' permission (HTTP {sc}). "
+                f"Falling back to FACEBOOK_PAGES seeds."
+            )
+        else:
+            print(f"[crawler] FacebookCrawler: Page discovery call failed (HTTP {sc}): {res['error_body']}")
+        return []
+
+    def _resolve_page_list(self, keywords: List[str]) -> List[str]:
+        """
+        Build the final ordered list of pages to fetch from:
+        1. Auto-discovered pages (when SOCIAL_AUTO_DISCOVERY=true and SOCIAL_SOURCE_MODE!=manual)
+        2. Manually specified seeds from FACEBOOK_PAGES (merged in, deduped)
+        """
+        if self.source_mode == "manual":
+            return list(self.seed_pages)  # strict manual-only mode
+        discovered = self._discover_pages(keywords) if self.auto_discovery else []
+        seen = set(discovered)
+        combined = list(discovered)
+        for seed in self.seed_pages:
+            if seed not in seen:
+                combined.append(seed)
+                seen.add(seed)
+        return combined
 
     def _build_post(self, item: Dict, page_id: str) -> Dict[str, Any]:
         """Build a normalised post dict with source_url from a raw Graph API feed item."""
@@ -372,15 +455,30 @@ class FacebookCrawler(BaseCrawler):
         geo: Dict[str, Any] = None,
         since: str = None
     ) -> Any:
+        if not self.enabled:
+            return {"status": "disabled", "message": "Facebook crawler is disabled (ENABLE_FACEBOOK=false)."}
         if not self.access_token:
             return {"status": "error", "message": "No credentials configured: META_ACCESS_TOKEN is missing."}
-        if not self.pages:
-            return {"status": "error", "message": "No Facebook pages configured. Set FACEBOOK_PAGES in .env."}
+
+        page_ids = self._resolve_page_list(keywords or [])
+        if not page_ids:
+            if self.source_mode == "manual":
+                return {
+                    "status": "error",
+                    "message": "No Facebook pages configured (SOCIAL_SOURCE_MODE=manual, FACEBOOK_PAGES is empty)."
+                }
+            return {
+                "status": "error",
+                "message": (
+                    "No Facebook pages found via auto-discovery and no seeds configured in FACEBOOK_PAGES. "
+                    "Set FACEBOOK_PAGES=<page_id1>,<page_id2> in .env, or ensure the token has 'pages_search' permission."
+                )
+            }
 
         all_posts: List[Dict] = []
-        for page_id in self.pages:
+        for page_id in page_ids:
             url = (
-                f"https://graph.facebook.com/v20.0/{urllib.parse.quote(page_id)}/feed"
+                f"https://graph.facebook.com/v20.0/{urllib.parse.quote(str(page_id))}/feed"
                 f"?fields=id,message,created_time,shares,likes.summary(true),comments.summary(true)"
                 f"&access_token={self.access_token}"
             )
@@ -389,8 +487,7 @@ class FacebookCrawler(BaseCrawler):
                 print(f"FacebookCrawler: Failed to fetch page '{page_id}': {res['error_body']}")
                 continue
             for item in res["data"].get("data", []):
-                post = self._build_post(item, page_id)
-                # Optional keyword filter
+                post = self._build_post(item, str(page_id))
                 if keywords:
                     text_lower = post["text"].lower()
                     if not any(k.lower() in text_lower for k in keywords):
@@ -403,15 +500,15 @@ class FacebookCrawler(BaseCrawler):
         keywords: List[str] = None,
         geo: Dict[str, Any] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        if not self.enabled:
+            yield {"status": "disabled", "message": "Facebook crawler is disabled (ENABLE_FACEBOOK=false)."}
+            return
         if not self.access_token:
             yield {"status": "error", "message": "No credentials configured: META_ACCESS_TOKEN is missing."}
             return
-        if not self.pages:
-            yield {"status": "error", "message": "No Facebook pages configured. Set FACEBOOK_PAGES in .env."}
-            return
 
         posts = self.fetch_posts(keywords, geo)
-        if isinstance(posts, dict) and posts.get("status") == "error":
+        if isinstance(posts, dict):
             yield posts
         elif isinstance(posts, list):
             for post in posts:
@@ -569,16 +666,34 @@ class YouTubeCrawler(BaseCrawler):
 
 class TelegramCrawler(BaseCrawler):
     """
-    Ingestion client for Telegram channels using MTProto Client API (Telethon).
+    Ingestion client for Telegram using MTProto (Telethon).
 
-    Target channels are read from the TELEGRAM_CHANNELS environment variable
-    (comma-separated, with or without '@'). No channel is hardcoded.
-    Each message includes a source_url in the form https://t.me/<username>/<message_id>
-    for public channels, or None for private channels/groups.
+    Discovery mode (SOCIAL_AUTO_DISCOVERY=true, default):
+        Uses keyword-driven global message search across all channels the
+        session account has joined:
+            client.iter_messages(None, search=query)
+        The system automatically identifies the source channel from each
+        message — no channel list needed in advance.
+        TELEGRAM_CHANNELS acts as optional seed channels: if provided, the
+        crawler joins them first (expanding the searchable dialog set), then
+        searches across everything.
+
+    Manual mode (SOCIAL_SOURCE_MODE=manual):
+        Only fetches from channels explicitly listed in TELEGRAM_CHANNELS,
+        with keyword filtering applied.
+
+    Disabled (ENABLE_TELEGRAM=false):
+        Returns a disabled status immediately without connecting.
+
+    source_url format: https://t.me/<channel_username>/<message_id>
+    Set to None for private channels/groups (no public permalink available).
     """
 
     def __init__(self, lookback_days: int = 7):
         self.lookback_days = lookback_days
+        self.enabled = _is_enabled("ENABLE_TELEGRAM", default=True)
+        self.auto_discovery = AUTO_DISCOVERY
+        self.source_mode = SOURCE_MODE
         current_dir = os.path.dirname(os.path.abspath(__file__))
         self.session_path = os.path.abspath(os.path.join(current_dir, "..", "..", "telegram_session"))
 
@@ -593,8 +708,14 @@ class TelegramCrawler(BaseCrawler):
         if not self.api_id or not self.api_hash:
             print("TelegramCrawler: TELEGRAM_API_ID or TELEGRAM_API_HASH environment variables missing.")
 
-        # Discover channels from env — no hardcoded list
-        self.channels = _read_channel_list("TELEGRAM_CHANNELS", "TelegramCrawler")
+        # Optional seed channels — joined before global search to expand the
+        # searchable dialog set. Not a fixed allowlist.
+        self.seed_channels = _read_seed_list("TELEGRAM_CHANNELS")
+        if self.seed_channels:
+            print(f"[crawler] TelegramCrawler: {len(self.seed_channels)} seed channel(s) will be joined: {self.seed_channels}")
+        if not self.enabled:
+            print("[crawler] TelegramCrawler: disabled via ENABLE_TELEGRAM=false")
+
 
     _CITIES = [
         {"city": "Ahmedabad", "latitude": 23.0225, "longitude": 72.5714},
@@ -607,16 +728,15 @@ class TelegramCrawler(BaseCrawler):
     def _build_post(self, message: Any, channel_username: Optional[str]) -> Dict[str, Any]:
         """
         Build a normalised post dict for a Telegram message.
-        source_url is set to the t.me permalink when channel_username is available
-        (i.e. the channel is public). For private channels it is set to None.
+        source_url is set to the t.me permalink when channel_username is known
+        (public channel). Set to None for private channels/groups.
         """
         post_id = f"tg_{channel_username or 'private'}_{message.id}"
-        # Build direct post link only when the public username is known
-        if channel_username:
-            source_url = f"https://t.me/{channel_username}/{message.id}"
-        else:
-            source_url = None  # Private channel — direct link not available
-
+        source_url = (
+            f"https://t.me/{channel_username}/{message.id}"
+            if channel_username
+            else None
+        )
         return {
             "id": post_id,
             "username": f"@{channel_username}" if channel_username else "@private_channel",
@@ -638,15 +758,12 @@ class TelegramCrawler(BaseCrawler):
         geo: Dict[str, Any] = None,
         since: str = None
     ) -> Any:
+        if not self.enabled:
+            return {"status": "disabled", "message": "Telegram crawler is disabled (ENABLE_TELEGRAM=false)."}
         if not self.api_id or not self.api_hash:
             return {
                 "status": "pending_auth",
                 "message": "Telegram API credentials not configured or session not authenticated"
-            }
-        if not self.channels:
-            return {
-                "status": "error",
-                "message": "No Telegram channels configured. Set TELEGRAM_CHANNELS in .env."
             }
 
         import threading
@@ -657,7 +774,7 @@ class TelegramCrawler(BaseCrawler):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
             except Exception as e:
-                result_container.append({"status": "pending_auth", "message": f"Event loop initialization error: {e}"})
+                result_container.append({"status": "pending_auth", "message": f"Event loop init error: {e}"})
                 return
 
             from telethon import TelegramClient
@@ -674,32 +791,64 @@ class TelegramCrawler(BaseCrawler):
 
                     from datetime import timezone, timedelta
                     cutoff_date = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
+                    query = " ".join(keywords) if keywords else ""
                     posts: List[Dict] = []
 
-                    for channel in self.channels:
+                    # ── Step 1: Join seed channels to expand the searchable dialog set ──
+                    for ch in self.seed_channels:
                         try:
-                            # Resolve the entity to get its public username (None for private)
-                            entity = await client.get_entity(channel)
-                            public_username = getattr(entity, "username", None)
+                            await client.get_entity(ch)  # resolving is sufficient to add to session
+                            print(f"[crawler] TelegramCrawler: resolved seed channel '{ch}'")
+                        except Exception as e:
+                            print(f"[crawler] TelegramCrawler: Could not resolve seed '{ch}': {e}")
 
+                    # ── Step 2: Keyword-driven global search across all joined dialogs ──
+                    if query and self.source_mode != "manual":
+                        print(f"[crawler] TelegramCrawler: Running global search for '{query}'")
+                        seen_ids: set = set()
+                        try:
                             async for message in client.iter_messages(
-                                entity, limit=10, offset_date=cutoff_date, reverse=True
+                                None, search=query, limit=200, offset_date=cutoff_date
                             ):
                                 if not message.text:
                                     continue
                                 if message.date and message.date < cutoff_date:
                                     continue
-                                if keywords:
-                                    text_lower = message.text.lower()
-                                    if not any(k.lower() in text_lower for k in keywords):
-                                        continue
-                                posts.append(self._build_post(message, public_username))
-
+                                # Extract source channel from message.chat attribute
+                                chat = getattr(message, "chat", None)
+                                channel_username = getattr(chat, "username", None) if chat else None
+                                post = self._build_post(message, channel_username)
+                                if post["id"] not in seen_ids:
+                                    seen_ids.add(post["id"])
+                                    posts.append(post)
                         except Exception as e:
-                            print(f"TelegramCrawler: Failed to fetch from channel '{channel}': {e}")
+                            print(f"[crawler] TelegramCrawler: Global search error: {e}")
+
+                    # ── Step 3: Manual-mode or no-keywords fallback — iterate seed channels ──
+                    if self.source_mode == "manual" or (not query and self.seed_channels):
+                        for ch in self.seed_channels:
+                            try:
+                                entity = await client.get_entity(ch)
+                                pub_username = getattr(entity, "username", None)
+                                async for message in client.iter_messages(
+                                    entity, limit=10, offset_date=cutoff_date, reverse=True
+                                ):
+                                    if not message.text:
+                                        continue
+                                    if message.date and message.date < cutoff_date:
+                                        continue
+                                    if keywords:
+                                        if not any(k.lower() in message.text.lower() for k in keywords):
+                                            continue
+                                    post = self._build_post(message, pub_username)
+                                    if post["id"] not in {p["id"] for p in posts}:
+                                        posts.append(post)
+                            except Exception as e:
+                                print(f"[crawler] TelegramCrawler: Failed to fetch seed '{ch}': {e}")
 
                     posts.sort(key=lambda p: p["timestamp"], reverse=True)
                     return posts
+
                 except Exception as ex:
                     return {"status": "pending_auth", "message": f"Telegram connection error: {ex}"}
                 finally:
@@ -709,14 +858,13 @@ class TelegramCrawler(BaseCrawler):
                 res = loop.run_until_complete(run())
                 result_container.append(res)
             except Exception as e:
-                result_container.append({"status": "pending_auth", "message": f"Telegram loop execution error: {e}"})
+                result_container.append({"status": "pending_auth", "message": f"Telegram loop error: {e}"})
             finally:
                 loop.close()
 
         t = threading.Thread(target=worker)
         t.start()
         t.join()
-
         return result_container[0] if result_container else []
 
     async def stream_posts(
@@ -724,22 +872,18 @@ class TelegramCrawler(BaseCrawler):
         keywords: List[str] = None,
         geo: Dict[str, Any] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        if not self.enabled:
+            yield {"status": "disabled", "message": "Telegram crawler is disabled (ENABLE_TELEGRAM=false)."}
+            return
         if not self.api_id or not self.api_hash:
             yield {
                 "status": "pending_auth",
                 "message": "Telegram API credentials not configured or session not authenticated"
             }
             return
-        if not self.channels:
-            yield {
-                "status": "error",
-                "message": "No Telegram channels configured. Set TELEGRAM_CHANNELS in .env."
-            }
-            return
 
         from telethon import TelegramClient
         client = TelegramClient(self.session_path, self.api_id, self.api_hash)
-
         await client.connect()
         if not await client.is_user_authorized():
             yield {
@@ -749,48 +893,70 @@ class TelegramCrawler(BaseCrawler):
             await client.disconnect()
             return
 
-        print(f"TelegramCrawler: Starting live polling stream for channels: {self.channels}")
+        query = " ".join(keywords) if keywords else ""
+        print(f"[crawler] TelegramCrawler: Starting auto-discovery stream for query '{query}'")
 
-        # Pre-resolve entity -> public username mapping once
-        entity_map: Dict[str, Optional[str]] = {}
-        for channel in self.channels:
+        # Join seed channels first to expand the searchable dialog set
+        for ch in self.seed_channels:
             try:
-                entity = await client.get_entity(channel)
-                entity_map[channel] = getattr(entity, "username", None)
+                await client.get_entity(ch)
             except Exception as e:
-                print(f"TelegramCrawler: Could not resolve entity for '{channel}': {e}")
-                entity_map[channel] = None
+                print(f"[crawler] TelegramCrawler: Could not resolve seed '{ch}': {e}")
 
         yielded_ids: set = set()
 
         try:
             while True:
-                for channel in self.channels:
-                    try:
-                        from datetime import timezone, timedelta
-                        cutoff_date = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
-                        public_username = entity_map.get(channel)
+                from datetime import timezone, timedelta
+                cutoff_date = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
 
-                        async for message in client.iter_messages(channel, limit=5):
+                # ── Auto-discovery: global keyword search across all joined dialogs ──
+                if query and self.source_mode != "manual":
+                    try:
+                        async for message in client.iter_messages(None, search=query, limit=50):
                             if not message.text:
                                 continue
                             if message.date and message.date < cutoff_date:
                                 continue
-                            if keywords:
-                                text_lower = message.text.lower()
-                                if not any(k.lower() in text_lower for k in keywords):
-                                    continue
-
-                            post = self._build_post(message, public_username)
+                            chat = getattr(message, "chat", None)
+                            channel_username = getattr(chat, "username", None) if chat else None
+                            post = self._build_post(message, channel_username)
                             if post["id"] in yielded_ids:
                                 continue
                             yielded_ids.add(post["id"])
                             yield post
                             await asyncio.sleep(0.5)
                     except Exception as e:
-                        print(f"TelegramCrawler: error fetching from channel '{channel}': {e}")
-                        continue
+                        print(f"[crawler] TelegramCrawler: Stream global search error: {e}")
+
+                # ── Manual/fallback: iterate seed channels directly ──
+                elif self.seed_channels:
+                    for ch in self.seed_channels:
+                        try:
+                            entity = await client.get_entity(ch)
+                            pub_username = getattr(entity, "username", None)
+                            async for message in client.iter_messages(entity, limit=5):
+                                if not message.text:
+                                    continue
+                                if message.date and message.date < cutoff_date:
+                                    continue
+                                if keywords:
+                                    if not any(k.lower() in message.text.lower() for k in keywords):
+                                        continue
+                                post = self._build_post(message, pub_username)
+                                if post["id"] in yielded_ids:
+                                    continue
+                                yielded_ids.add(post["id"])
+                                yield post
+                                await asyncio.sleep(0.5)
+                        except Exception as e:
+                            print(f"[crawler] TelegramCrawler: Stream error for seed '{ch}': {e}")
+                else:
+                    # No query and no seeds — nothing to do; wait before retrying
+                    print("[crawler] TelegramCrawler: No query and no seed channels. Waiting...")
 
                 await asyncio.sleep(20)
         finally:
             await client.disconnect()
+
+
