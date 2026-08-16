@@ -123,15 +123,26 @@ cd backend
 
 # Create a virtual environment:
 python -m venv venv
+```
 
-# Activate it:
+**Activate it — choose the command for your shell:**
+
+```bash
+# macOS / Linux / WSL (bash / zsh):
+source venv/bin/activate
+```
+
+```powershell
 # Windows PowerShell:
 .\venv\Scripts\Activate.ps1
-# Windows cmd:
-.\venv\Scripts\activate.bat
-# macOS / Linux:
-source venv/bin/activate
+```
 
+```cmd
+REM Windows Command Prompt:
+.\venv\Scripts\activate.bat
+```
+
+```bash
 # Install Python dependencies:
 pip install -r requirements.txt
 ```
@@ -305,11 +316,21 @@ Both services must run simultaneously in **two separate terminals**.
 
 ```bash
 cd backend
+```
 
-# Activate the virtual environment:
-.\venv\Scripts\Activate.ps1    # Windows PowerShell
-source venv/bin/activate       # macOS / Linux
+**Activate the virtual environment — choose your shell:**
 
+```bash
+# macOS / Linux / WSL:
+source venv/bin/activate
+```
+
+```powershell
+# Windows PowerShell:
+.\venv\Scripts\Activate.ps1
+```
+
+```bash
 # Start the server:
 python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
@@ -651,10 +672,10 @@ taskkill /PID <PID> /F
 cd backend
 python -m venv venv
 
-# Windows PowerShell:
-.\venv\Scripts\Activate.ps1
-# macOS / Linux:
-source venv/bin/activate
+# Activate — pick your shell:
+#   macOS / Linux / WSL:   source venv/bin/activate
+#   Windows PowerShell:    .\venv\Scripts\Activate.ps1
+#   Windows cmd:           .\venv\Scripts\activate.bat
 
 pip install -r requirements.txt
 
@@ -664,7 +685,7 @@ npm install
 
 # ── Environment ────────────────────────────────────────────────────────────
 cd ..
-cp .env.example .env          # Windows: copy .env.example .env
+cp .env.example .env          # Windows cmd: copy .env.example .env
 # Edit .env — add at minimum: GEMINI_API_KEY
 
 # ── (One-time) Telegram authentication ────────────────────────────────────
@@ -673,7 +694,7 @@ python login_telegram.py
 
 # ── Start backend (Terminal 1) ─────────────────────────────────────────────
 cd backend
-.\venv\Scripts\Activate.ps1   # or: source venv/bin/activate
+# Activate venv (see above), then:
 python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 
 # ── Start frontend (Terminal 2) ────────────────────────────────────────────
