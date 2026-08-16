@@ -130,7 +130,7 @@ Served by default at `http://127.0.0.1:8000/docs` (Swagger UI).
     "timestamp": 1785520500.66,
     "service": "social-threat-analyzer-backend",
     "version": "0.1.0",
-    "gemini_model": "gemini-2.0-flash"
+    "gemini_model": "gemini-3.5-flash"
   }
   ```
 
