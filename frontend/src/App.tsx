@@ -124,211 +124,205 @@ function CoordinationNetworkGraph() {
     const gravity = 0.04;
     const damping = 0.82;
 
-    const tick = () => {
-      // 1. Repulsion force between pairs
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          const n1 = nodes[i];
-          const n2 = nodes[j];
-          const dx = n2.x - n1.x;
-          const dy = n2.y - n1.y;
-          const distSq = dx * dx + dy * dy || 1;
-          const dist = Math.sqrt(distSq);
+    // Alpha (energy) controls simulation activity.
+    // Starts high, decays each frame, stops below threshold → no more shaking.
+    let alpha = 1.0;
+    const alphaDecay = 0.02;      // decay rate per frame (2 % per frame)
+    const alphaMin  = 0.005;      // stop threshold
+    const alphaTarget = 0;        // target energy level
 
-          if (dist < 320) {
-            let currentRepulsion = repulsion;
-            const isN1Coordinated = n1.suspicion >= 75;
-            const isN2Coordinated = n2.suspicion >= 75;
-            
-            if (isN1Coordinated && isN2Coordinated) {
-              const isConnected = edges.some(e => 
-                (e.from === n1.id && e.to === n2.id) || 
-                (e.from === n2.id && e.to === n1.id)
-              );
-              if (!isConnected) {
-                // Drastically push apart different clusters so they separate visually
-                currentRepulsion = repulsion * 7;
-              } else {
-                // Keep same-cluster nodes closer but distinct
-                currentRepulsion = repulsion * 0.75;
-              }
-            } else if (isN1Coordinated || isN2Coordinated) {
-              // Push coordinated clusters away from background noise
-              currentRepulsion = repulsion * 4;
-            } else {
-              // Faded background nodes repel each other gently
-              currentRepulsion = repulsion * 0.3;
-            }
-
-            const force = currentRepulsion / distSq;
-            const fx = (dx / dist) * force;
-            const fy = (dy / dist) * force;
-
-            n1.vx -= fx;
-            n1.vy -= fy;
-            n2.vx += fx;
-            n2.vy += fy;
-          }
-        }
-      }
-
-      // 2. Attractive force along edges (springs)
-      edges.forEach((edge) => {
-        const n1 = nodes.find(n => n.id === edge.from);
-        const n2 = nodes.find(n => n.id === edge.to);
-        if (!n1 || !n2) return;
-
-        const dx = n2.x - n1.x;
-        const dy = n2.y - n1.y;
-        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-
-        const displacement = dist - springLength;
-        const force = springK * displacement;
-        const fx = (dx / dist) * force;
-        const fy = (dy / dist) * force;
-
-        n1.vx += fx;
-        n1.vy += fy;
-        n2.vx -= fx;
-        n2.vy -= fy;
-      });
-
-      // 3. Gravity center force & update node coordinates
-      const cx = width / 2;
-      const cy = height / 2;
-
-      nodes.forEach((node) => {
-        if (node === draggingNodeRef.current) return;
-
-        const dx = cx - node.x;
-        const dy = cy - node.y;
-
-        node.vx += dx * gravity;
-        node.vy += dy * gravity;
-
-        node.vx *= damping;
-        node.vy *= damping;
-        
-        node.x += node.vx;
-        node.y += node.vy;
-
-        // Keep inside bounds
-        node.x = Math.max(30, Math.min(width - 30, node.x));
-        node.y = Math.max(30, Math.min(height - 30, node.y));
-      });
-
-      // 4. Draw Layout
+    const drawFrame = () => {
+      // ── Draw Layout ──────────────────────────────────────────────────────
       ctx.clearRect(0, 0, width, height);
 
-      // Draw grid backing
+      // Grid backing
       ctx.strokeStyle = '#0e0e11';
       ctx.lineWidth = 1;
       const step = 40;
       for (let x = 0; x < width; x += step) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, height);
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
       }
       for (let y = 0; y < height; y += step) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(width, y);
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
       }
 
-      // Draw Edges
+      // Edges
       edges.forEach((edge) => {
         const n1 = nodes.find(n => n.id === edge.from);
         const n2 = nodes.find(n => n.id === edge.to);
         if (!n1 || !n2) return;
-
         ctx.beginPath();
         ctx.moveTo(n1.x, n1.y);
         ctx.lineTo(n2.x, n2.y);
-        
         if (edge.suspicion_score >= 75) {
-          ctx.strokeStyle = 'rgba(239, 68, 68, 0.45)'; // Rose
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.45)';
           ctx.lineWidth = 2.5;
         } else {
-          ctx.strokeStyle = 'rgba(245, 158, 11, 0.35)'; // Amber
+          ctx.strokeStyle = 'rgba(245, 158, 11, 0.35)';
           ctx.lineWidth = 1.5;
         }
         ctx.stroke();
       });
 
-      // Draw Nodes
+      // Nodes
       nodes.forEach((node) => {
-        const isHovered = hoveredNode && hoveredNode.id === node.id;
+        const isHovered  = hoveredNode  && hoveredNode.id  === node.id;
         const isSelected = selectedNode && selectedNode.id === node.id;
         const isCoordinated = node.suspicion >= 75;
-        
+
         if (!isCoordinated) {
-          // Render background noise node small and faded, with no halos or text
           const radius = 3;
           ctx.beginPath();
           ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI);
-          ctx.fillStyle = 'rgba(63, 63, 70, 0.15)'; // Very faint Zinc
+          ctx.fillStyle = 'rgba(63, 63, 70, 0.15)';
           ctx.fill();
           return;
         }
 
         const radius = 12 + Math.min(node.post_count * 2.5, 12);
-        
-        // Glowing ring for highly suspicious accounts
+
+        // Glow ring
         ctx.beginPath();
         ctx.arc(node.x, node.y, radius + 6, 0, 2 * Math.PI);
         ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
         ctx.fill();
-        
+
         ctx.beginPath();
         ctx.arc(node.x, node.y, radius + 4, 0, 2 * Math.PI);
         ctx.strokeStyle = 'rgba(239, 68, 68, 0.45)';
         ctx.lineWidth = 1.2;
         ctx.stroke();
 
-        // Selection ring
+        // Selection / hover ring
         if (isSelected) {
           ctx.beginPath();
           ctx.arc(node.x, node.y, radius + 5, 0, 2 * Math.PI);
-          ctx.strokeStyle = '#6366f1'; // Indigo 500
+          ctx.strokeStyle = '#6366f1';
           ctx.lineWidth = 2.5;
           ctx.stroke();
         } else if (isHovered) {
           ctx.beginPath();
           ctx.arc(node.x, node.y, radius + 4, 0, 2 * Math.PI);
-          ctx.strokeStyle = '#a5b4fc'; // Indigo 300
+          ctx.strokeStyle = '#a5b4fc';
           ctx.lineWidth = 1.8;
           ctx.stroke();
         }
 
-        // Platform center dot coloring
+        // Platform fill
         ctx.beginPath();
         ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI);
         let platformColor = '#71717a';
         switch (node.platform.toLowerCase()) {
-          case 'x': platformColor = '#ffffff'; break;
-          case 'youtube': platformColor = '#ef4444'; break;
+          case 'x':         platformColor = '#ffffff'; break;
+          case 'youtube':   platformColor = '#ef4444'; break;
           case 'instagram': platformColor = '#ec4899'; break;
-          case 'facebook': platformColor = '#3b82f6'; break;
-          case 'telegram': platformColor = '#06b6d4'; break;
+          case 'facebook':  platformColor = '#3b82f6'; break;
+          case 'telegram':  platformColor = '#06b6d4'; break;
         }
         ctx.fillStyle = platformColor;
         ctx.fill();
 
-        // Node Label
+        // Label
         ctx.font = isHovered ? 'bold 10px monospace' : '9px monospace';
         ctx.fillStyle = isHovered ? '#ffffff' : '#e4e4e7';
         ctx.textAlign = 'center';
         ctx.fillText(node.label, node.x, node.y - radius - 8);
       });
+    };
 
-      animationFrameId = requestAnimationFrame(tick);
+    const tick = () => {
+      // Only run physics while the simulation has energy
+      if (alpha > alphaTarget) {
+        // Scale all forces by current alpha so motion dies out naturally
+        const a = alpha;
+
+        // 1. Repulsion between node pairs
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            const n1 = nodes[i];
+            const n2 = nodes[j];
+            const dx = n2.x - n1.x;
+            const dy = n2.y - n1.y;
+            const distSq = dx * dx + dy * dy || 1;
+            const dist = Math.sqrt(distSq);
+
+            if (dist < 320) {
+              let currentRepulsion = repulsion;
+              const isN1Coordinated = n1.suspicion >= 75;
+              const isN2Coordinated = n2.suspicion >= 75;
+
+              if (isN1Coordinated && isN2Coordinated) {
+                const isConnected = edges.some(e =>
+                  (e.from === n1.id && e.to === n2.id) ||
+                  (e.from === n2.id && e.to === n1.id)
+                );
+                currentRepulsion = isConnected ? repulsion * 0.75 : repulsion * 7;
+              } else if (isN1Coordinated || isN2Coordinated) {
+                currentRepulsion = repulsion * 4;
+              } else {
+                currentRepulsion = repulsion * 0.3;
+              }
+
+              const force = (currentRepulsion / distSq) * a;
+              const fx = (dx / dist) * force;
+              const fy = (dy / dist) * force;
+              n1.vx -= fx; n1.vy -= fy;
+              n2.vx += fx; n2.vy += fy;
+            }
+          }
+        }
+
+        // 2. Spring attraction along edges
+        edges.forEach((edge) => {
+          const n1 = nodes.find(n => n.id === edge.from);
+          const n2 = nodes.find(n => n.id === edge.to);
+          if (!n1 || !n2) return;
+          const dx = n2.x - n1.x;
+          const dy = n2.y - n1.y;
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          const displacement = dist - springLength;
+          const force = springK * displacement * a;
+          const fx = (dx / dist) * force;
+          const fy = (dy / dist) * force;
+          n1.vx += fx; n1.vy += fy;
+          n2.vx -= fx; n2.vy -= fy;
+        });
+
+        // 3. Gravity toward center + integrate positions
+        const cx = width / 2;
+        const cy = height / 2;
+        nodes.forEach((node) => {
+          if (node === draggingNodeRef.current) return;
+          node.vx += (cx - node.x) * gravity * a;
+          node.vy += (cy - node.y) * gravity * a;
+          node.vx *= damping;
+          node.vy *= damping;
+          node.x += node.vx;
+          node.y += node.vy;
+          node.x = Math.max(30, Math.min(width - 30, node.x));
+          node.y = Math.max(30, Math.min(height - 30, node.y));
+        });
+
+        // Decay alpha toward minimum
+        alpha = Math.max(alphaTarget, alpha - alphaDecay);
+      }
+
+      // Always redraw (so hover/select effects update even when settled)
+      drawFrame();
+
+      // Keep scheduling frames while above threshold OR while a node is dragged
+      if (alpha > alphaMin || draggingNodeRef.current) {
+        animationFrameId = requestAnimationFrame(tick);
+      }
+      // If settled and not dragging: no more rAF → graph is completely still
     };
 
     animationFrameId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animationFrameId);
   }, [networkData, hoveredNode, selectedNode]);
+
+
+
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
