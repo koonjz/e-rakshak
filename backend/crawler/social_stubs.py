@@ -745,7 +745,7 @@ class TelegramCrawler(BaseCrawler):
             "text": message.text,
             "source_url": source_url,
             "engagement": {
-                "likes": getattr(message, "views", 0) // 100 or random.randint(1, 10),
+                "likes": (getattr(message, "views", 0) or 0) // 100 or random.randint(1, 10),
                 "shares": 0,
                 "comments": 0
             },
@@ -793,28 +793,72 @@ class TelegramCrawler(BaseCrawler):
                     cutoff_date = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
                     query = " ".join(keywords) if keywords else ""
                     posts: List[Dict] = []
+                    seen_ids: set = set()
 
-                    # ── Step 1: Join seed channels to expand the searchable dialog set ──
+                    # Collect all entities/channels to scan
+                    entities_to_scan = []
+
+                    # 1. Join and add seed channels
                     for ch in self.seed_channels:
                         try:
-                            await client.get_entity(ch)  # resolving is sufficient to add to session
-                            print(f"[crawler] TelegramCrawler: resolved seed channel '{ch}'")
+                            entity = await client.get_entity(ch)
+                            pub_username = getattr(entity, "username", None) or str(ch)
+                            entities_to_scan.append((entity, pub_username))
+                            print(f"[crawler] TelegramCrawler: Resolved seed channel '{ch}'")
                         except Exception as e:
                             print(f"[crawler] TelegramCrawler: Could not resolve seed '{ch}': {e}")
 
-                    # ── Step 2: Keyword-driven global search across all joined dialogs ──
+                    # 2. Dynamic discovery: search public channels by keywords
+                    if self.auto_discovery and self.source_mode != "manual" and keywords:
+                        from telethon.tl.functions.contacts import SearchRequest
+                        from telethon.tl.types import Channel
+                        for kw in keywords:
+                            try:
+                                search_res = await client(SearchRequest(q=kw, limit=8))
+                                print(f"[crawler] TelegramCrawler: Discovered {len(search_res.chats)} public entities for '{kw}'")
+                                for chat in search_res.chats:
+                                    if isinstance(chat, Channel):
+                                        username = getattr(chat, "username", None)
+                                        # Deduplicate against seeds and already added channels
+                                        if username and not any(u == username for _, u in entities_to_scan):
+                                            entities_to_scan.append((chat, username))
+                                            print(f"[crawler] TelegramCrawler: Auto-discovered public channel '@{username}'")
+                            except Exception as se:
+                                print(f"[crawler] TelegramCrawler: Dynamic channel search failed for '{kw}': {se}")
+
+                    # ── Fetching messages from target entities ──
+                    for entity, pub_username in entities_to_scan:
+                        try:
+                            print(f"[crawler] TelegramCrawler: Fetching from channel '@{pub_username}'")
+                            async for message in client.iter_messages(
+                                entity, limit=30
+                            ):
+                                if not message.text:
+                                    continue
+                                if message.date and message.date < cutoff_date:
+                                    # Since messages are returned newest first, we can stop fetching
+                                    break
+                                if keywords:
+                                    if not any(k.lower() in message.text.lower() for k in keywords):
+                                        continue
+                                post = self._build_post(message, pub_username)
+                                if post["id"] not in seen_ids:
+                                    seen_ids.add(post["id"])
+                                    posts.append(post)
+                        except Exception as fe:
+                            print(f"[crawler] TelegramCrawler: Failed to fetch from '{pub_username}': {fe}")
+
+                    # ── Fallback/Comprehensive: Keyword-driven global search across joined dialogs ──
                     if query and self.source_mode != "manual":
                         print(f"[crawler] TelegramCrawler: Running global search for '{query}'")
-                        seen_ids: set = set()
                         try:
                             async for message in client.iter_messages(
-                                None, search=query, limit=200, offset_date=cutoff_date
+                                None, search=query, limit=100
                             ):
                                 if not message.text:
                                     continue
                                 if message.date and message.date < cutoff_date:
                                     continue
-                                # Extract source channel from message.chat attribute
                                 chat = getattr(message, "chat", None)
                                 channel_username = getattr(chat, "username", None) if chat else None
                                 post = self._build_post(message, channel_username)
@@ -823,28 +867,6 @@ class TelegramCrawler(BaseCrawler):
                                     posts.append(post)
                         except Exception as e:
                             print(f"[crawler] TelegramCrawler: Global search error: {e}")
-
-                    # ── Step 3: Manual-mode or no-keywords fallback — iterate seed channels ──
-                    if self.source_mode == "manual" or (not query and self.seed_channels):
-                        for ch in self.seed_channels:
-                            try:
-                                entity = await client.get_entity(ch)
-                                pub_username = getattr(entity, "username", None)
-                                async for message in client.iter_messages(
-                                    entity, limit=10, offset_date=cutoff_date, reverse=True
-                                ):
-                                    if not message.text:
-                                        continue
-                                    if message.date and message.date < cutoff_date:
-                                        continue
-                                    if keywords:
-                                        if not any(k.lower() in message.text.lower() for k in keywords):
-                                            continue
-                                    post = self._build_post(message, pub_username)
-                                    if post["id"] not in {p["id"] for p in posts}:
-                                        posts.append(post)
-                            except Exception as e:
-                                print(f"[crawler] TelegramCrawler: Failed to fetch seed '{ch}': {e}")
 
                     posts.sort(key=lambda p: p["timestamp"], reverse=True)
                     return posts
@@ -910,10 +932,56 @@ class TelegramCrawler(BaseCrawler):
                 from datetime import timezone, timedelta
                 cutoff_date = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
 
-                # ── Auto-discovery: global keyword search across all joined dialogs ──
+                # Get all entities to stream from
+                entities_to_scan = []
+
+                # Add seeds
+                for ch in self.seed_channels:
+                    try:
+                        ent = await client.get_entity(ch)
+                        pub_username = getattr(ent, "username", None) or str(ch)
+                        entities_to_scan.append((ent, pub_username))
+                    except Exception:
+                        pass
+
+                # Discover new channels based on keywords
+                if self.auto_discovery and self.source_mode != "manual" and keywords:
+                    from telethon.tl.functions.contacts import SearchRequest
+                    from telethon.tl.types import Channel
+                    for kw in keywords:
+                        try:
+                            search_res = await client(SearchRequest(q=kw, limit=5))
+                            for chat in search_res.chats:
+                                if isinstance(chat, Channel):
+                                    username = getattr(chat, "username", None)
+                                    if username and not any(u == username for _, u in entities_to_scan):
+                                        entities_to_scan.append((chat, username))
+                        except Exception as se:
+                            print(f"[crawler] TelegramCrawler: Dynamic search failed during stream: {se}")
+
+                # ── Stream posts from resolved entities ──
+                for entity, pub_username in entities_to_scan:
+                    try:
+                        async for message in client.iter_messages(entity, limit=5):
+                            if not message.text:
+                                continue
+                            if message.date and message.date < cutoff_date:
+                                continue
+                            if keywords:
+                                if not any(k.lower() in message.text.lower() for k in keywords):
+                                    continue
+                            post = self._build_post(message, pub_username)
+                            if post["id"] not in yielded_ids:
+                                yielded_ids.add(post["id"])
+                                yield post
+                                await asyncio.sleep(0.5)
+                    except Exception:
+                        pass
+
+                # ── Fallback/Comprehensive: search all joined dialogs ──
                 if query and self.source_mode != "manual":
                     try:
-                        async for message in client.iter_messages(None, search=query, limit=50):
+                        async for message in client.iter_messages(None, search=query, limit=20):
                             if not message.text:
                                 continue
                             if message.date and message.date < cutoff_date:
@@ -921,39 +989,12 @@ class TelegramCrawler(BaseCrawler):
                             chat = getattr(message, "chat", None)
                             channel_username = getattr(chat, "username", None) if chat else None
                             post = self._build_post(message, channel_username)
-                            if post["id"] in yielded_ids:
-                                continue
-                            yielded_ids.add(post["id"])
-                            yield post
-                            await asyncio.sleep(0.5)
-                    except Exception as e:
-                        print(f"[crawler] TelegramCrawler: Stream global search error: {e}")
-
-                # ── Manual/fallback: iterate seed channels directly ──
-                elif self.seed_channels:
-                    for ch in self.seed_channels:
-                        try:
-                            entity = await client.get_entity(ch)
-                            pub_username = getattr(entity, "username", None)
-                            async for message in client.iter_messages(entity, limit=5):
-                                if not message.text:
-                                    continue
-                                if message.date and message.date < cutoff_date:
-                                    continue
-                                if keywords:
-                                    if not any(k.lower() in message.text.lower() for k in keywords):
-                                        continue
-                                post = self._build_post(message, pub_username)
-                                if post["id"] in yielded_ids:
-                                    continue
+                            if post["id"] not in yielded_ids:
                                 yielded_ids.add(post["id"])
                                 yield post
                                 await asyncio.sleep(0.5)
-                        except Exception as e:
-                            print(f"[crawler] TelegramCrawler: Stream error for seed '{ch}': {e}")
-                else:
-                    # No query and no seeds — nothing to do; wait before retrying
-                    print("[crawler] TelegramCrawler: No query and no seed channels. Waiting...")
+                    except Exception as e:
+                        print(f"[crawler] TelegramCrawler: Stream global search error: {e}")
 
                 await asyncio.sleep(20)
         finally:
