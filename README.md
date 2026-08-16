@@ -125,11 +125,16 @@ cd backend
 python -m venv venv
 ```
 
-**Activate it — choose the command for your shell:**
+**Activate it — choose the command that matches your shell:**
 
 ```bash
-# macOS / Linux / WSL (bash / zsh):
+# macOS / Linux (bash / zsh):
 source venv/bin/activate
+```
+
+```bash
+# Git Bash on Windows:
+source venv/Scripts/activate
 ```
 
 ```powershell
@@ -140,6 +145,14 @@ source venv/bin/activate
 ```cmd
 REM Windows Command Prompt:
 .\venv\Scripts\activate.bat
+```
+
+**Verify the venv is active before continuing:**
+
+```bash
+# You should see a path inside your project's venv folder, not a system path.
+which python          # macOS / Linux / Git Bash
+where python          # Windows PowerShell / cmd
 ```
 
 ```bash
@@ -321,8 +334,13 @@ cd backend
 **Activate the virtual environment — choose your shell:**
 
 ```bash
-# macOS / Linux / WSL:
+# macOS / Linux (bash / zsh):
 source venv/bin/activate
+```
+
+```bash
+# Git Bash on Windows:
+source venv/Scripts/activate
 ```
 
 ```powershell
@@ -330,8 +348,18 @@ source venv/bin/activate
 .\venv\Scripts\Activate.ps1
 ```
 
+> **Verify activation worked** before running uvicorn:
+> ```bash
+> which python    # Git Bash / macOS / Linux
+> where python    # PowerShell / cmd
+> ```
+> The path must point inside your project's `venv` folder, not
+> `C:\Windows\...` or the Microsoft Store alias. If it still shows
+> the system Python, the venv was not activated — re-run the
+> activation command above.
+
 ```bash
-# Start the server:
+# Start the server (venv must be active):
 python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
