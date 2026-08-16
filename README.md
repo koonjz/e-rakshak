@@ -370,10 +370,12 @@ INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 ```
 
-| URL | Purpose |
-|-----|---------|
-| http://localhost:8000 | Backend API |
-| http://localhost:8000/docs | Interactive Swagger API docs |
+| URL | What you see |
+|-----|--------------|
+| `http://localhost:8000/api/health` | `{"status":"healthy",...}` — confirms the backend is running ✅ |
+| `http://localhost:8000/docs` | Interactive Swagger API docs ✅ |
+| `http://localhost:8000/` | `{"detail":"Not Found"}` — **this is normal**, no route is defined at root |
+
 
 ### Terminal 2 — Frontend
 
