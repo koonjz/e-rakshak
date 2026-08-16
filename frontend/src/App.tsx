@@ -585,11 +585,14 @@ function App() {
   const [isAnalyzingImage, setIsAnalyzingImage] = useState(false)
   const [imageAnalysisResult, setImageAnalysisResult] = useState<{
     status: string;
+    ocr_status?: string;
     extracted_text?: string;
     detected_language?: string;
     threat_category?: string;
     confidence?: number;
     text_extraction_confidence?: number;
+    visual_labels?: { label: string; score: number }[];
+    overall_assessment?: string;
     message?: string;
   } | null>(null)
 
@@ -940,6 +943,9 @@ function App() {
     fetchIncidents()
     prepopulateLocalFeed()
 
+    // Debug print crawler state to verify credential load status
+    console.debug('Credentials precheck: YT=', youtubeKeyLoaded, 'Meta=', metaTokenLoaded, 'TG=', telegramAuthLoaded, 'X=', twitterAuthLoaded)
+
     // Status intervals
     const connInterval = setInterval(checkConnection, 15000)
     const statusInterval = setInterval(checkCrawlerStatus, 5000)
@@ -950,11 +956,11 @@ function App() {
       clearInterval(statusInterval)
       clearInterval(incidentsInterval)
     }
-  }, [])
+  }, [youtubeKeyLoaded, metaTokenLoaded, telegramAuthLoaded, twitterAuthLoaded])
 
   // Poll posts only when crawler is active
   useEffect(() => {
-    let pollInterval: NodeJS.Timeout
+    let pollInterval: any
     if (crawlerActive) {
       pollInterval = setInterval(pollPosts, 3000)
     }
